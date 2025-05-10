@@ -1,0 +1,19 @@
+{
+  "name": "monkeyscloud/monkeyslegion-router",
+  "description": "Attribute- and DSL-based HTTP router for MonkeysLegion",
+  "type": "library",
+  "license": "MIT",
+  "require": {
+    "php": "^8.4",
+    "psr/http-message": "^2.0",
+    "monkeyscloud/monkeyslegion-http": "^1.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "MonkeysLegion\\Router\\": "src/"
+    }
+  },
+  "extra": {
+    "branch-alias": { "dev-main": "1.0-dev" }
+  }
+}
