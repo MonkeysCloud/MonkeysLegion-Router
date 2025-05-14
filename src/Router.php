@@ -91,9 +91,9 @@ class Router
 
         // No route matched → return a simple 404
         return new Response(
+            Stream::createFromString('404 Not Found'),
             404,
             [],
-            Stream::createFromString('404 Not Found')
         );
     }
 }
