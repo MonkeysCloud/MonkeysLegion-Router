@@ -38,16 +38,25 @@ class Router
      * Scan a controller object for methods annotated with #[Route]
      * and register each as a route.
      *
-     * @param object $controller Instance of a controller class
+     * @param object $controller  Instance of a controller class
      */
     public function registerController(object $controller): void
     {
         $ref = new \ReflectionClass($controller);
+
         foreach ($ref->getMethods() as $method) {
             foreach ($method->getAttributes(RouteAttribute::class) as $attr) {
                 /** @var RouteAttribute $meta */
                 $meta = $attr->newInstance();
-                $this->add($meta->method, $meta->path, [$controller, $method->getName()]);
+
+                // Loop through each HTTP verb (string or array)
+                foreach ((array) $meta->methods as $httpMethod) {
+                    $this->add(
+                        strtoupper($httpMethod),       // e.g. 'GET', 'POST'
+                        $meta->path,                   // normalized path
+                        [$controller, $method->getName()]
+                    );
+                }
             }
         }
     }
