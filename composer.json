@@ -39,8 +39,7 @@
   },
   "autoload-dev": {
     "psr-4": {
-      "MonkeysLegion\\Router\\Tests\\": "tests/",
-      "MonkeysLegion\\Router\\Examples\\": "examples/"
+      "MonkeysLegion\\Router\\Tests\\": "tests/"
     }
   },
   "scripts": {
@@ -53,7 +52,7 @@
   },
   "extra": {
     "branch-alias": {
-      "dev-main": "1.1.x-dev"
+      "dev-main": "2.0.x-dev"
     }
   },
   "config": {

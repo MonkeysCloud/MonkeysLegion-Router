@@ -1,6 +1,6 @@
 # MonkeysLegion Router - API Reference
 
-Complete API documentation for MonkeysLegion Router v1.1.
+Complete API documentation for MonkeysLegion Router v2.0.
 
 ## Table of Contents
 
@@ -363,5 +363,5 @@ Apply middleware to controller or method.
 
 ---
 
-**Version:** 1.1.0
+**Version:** 2.0.0
 **Last Updated:** November 2025

@@ -5,7 +5,7 @@ All notable changes to the MonkeysLegion Router will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] - 2025-11-23
+## [2.0.0] - 2025-11-23
 
 ### Added
 
@@ -106,17 +106,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## Migration Guide v1.0 → v1.1
+## Migration Guide v1.0 → v2.0
 
 ### Route Definition
 ```php
 // v1.0
 $router->add('GET', '/users/{id}', $handler);
 
-// v1.1 - Basic (backward compatible)
+// v2.0 - Basic (backward compatible)
 $router->add('GET', '/users/{id}', $handler);
 
-// v1.1 - With new features
+// v2.0 - With new features
 $router->get('/users/{id:\d+}', $handler, 'users.show');
 ```
 
@@ -125,7 +125,7 @@ $router->get('/users/{id:\d+}', $handler, 'users.show');
 // v1.0
 #[Route('GET', '/users', name: 'user_list')]
 
-// v1.1 - Enhanced
+// v2.0 - Enhanced
 #[Route(
     'GET', 
     '/users',
@@ -141,7 +141,7 @@ $router->get('/users/{id:\d+}', $handler, 'users.show');
 // v1.0 - Still works
 $router->registerController(new UserController());
 
-// v1.1 - With prefix and middleware
+// v2.0 - With prefix and middleware
 #[RoutePrefix('/api/users')]
 #[Middleware(['cors', 'throttle'])]
 class UserController { ... }
@@ -158,7 +158,7 @@ $router->get('/admin', $handler, 'admin', ['auth']);
 
 ### URL Generation
 ```php
-// v1.1 - New feature
+// v2.0 - New feature
 $router->get('/users/{id}', $handler, 'users.show');
 $url = $router->url('users.show', ['id' => 123]);
 // Output: /users/123
@@ -183,7 +183,7 @@ Update your `composer.json`:
 ```json
 {
     "require": {
-        "monkeyscloud/monkeyslegion-router": "^1.1"
+        "monkeyscloud/monkeyslegion-router": "^2.0"
     }
 }
 ```
@@ -194,7 +194,7 @@ composer update monkeyscloud/monkeyslegion-router
 ```
 
 ### Code Changes
-Most v1.0 code will continue to work in v1.1. The main changes to watch for:
+Most v1.0 code will continue to work in v2.0. The main changes to watch for:
 
 1. If you were extending `Route` or `RouteCollection`, check the new signatures
 2. Custom route matching logic may need updates for optional parameters

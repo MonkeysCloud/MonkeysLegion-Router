@@ -6,7 +6,7 @@ We release patches for security vulnerabilities in the following versions:
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.1.x   | :white_check_mark: |
+| 2.0.x   | :white_check_mark: |
 | 1.x.x   | :x:                |
 
 ## Reporting a Vulnerability
@@ -228,7 +228,7 @@ Subscribe to security advisories:
 
 Security updates are released as:
 
-- **Patch releases** (1.1.x) for minor security fixes
+- **Patch releases** (2.0.x) for minor security fixes
 - **Minor releases** (2.x.0) for security improvements
 - **Out-of-band patches** for critical vulnerabilities
 
@@ -311,4 +311,4 @@ For encrypted communications:
 ---
 
 **Last Updated**: November 2025  
-**Version**: 1.1
+**Version**: 2.0

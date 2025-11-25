@@ -130,7 +130,7 @@ When creating a bug report, include:
 
 ## Environment
 - PHP Version: 8.4.0
-- Router Version: 1.1.0
+- Router Version: 2.0.0
 - OS: Ubuntu 24.04
 
 ## Code Sample
@@ -485,17 +485,17 @@ git pull upstream main
 
 We use [Semantic Versioning](https://semver.org/):
 
-- **MAJOR** (1.0.0): Breaking changes
-- **MINOR** (1.1.0): New features (backward compatible)
-- **PATCH** (1.0.1): Bug fixes
+- **MAJOR** (2.0.0): Breaking changes
+- **MINOR** (2.1.0): New features (backward compatible)
+- **PATCH** (2.0.1): Bug fixes
 
 ### Release Checklist
 
 1. Update CHANGELOG.md
 2. Update version in composer.json
 3. Run all tests
-4. Tag release: `git tag -a v1.1.0 -m "Release v1.1.0"`
-5. Push tag: `git push origin v1.1.0`
+4. Tag release: `git tag -a v2.0.0 -m "Release v2.0.0"`
+5. Push tag: `git push origin v2.0.0`
 6. Create GitHub release
 7. Update documentation
 
