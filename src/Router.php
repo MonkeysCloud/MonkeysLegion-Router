@@ -163,11 +163,32 @@ class Router
     }
 
     /**
-     * Create a route group with shared attributes
+     * Create a route group with shared attributes.
+     *
+     * Usage:
+     *   // Fluent style with extra attributes
+     *   $router->group()
+     *       ->prefix('/api')
+     *       ->middleware('auth')
+     *       ->group(function (Router $r) {
+     *           $r->get('/users', $handler, 'api.users.index');
+     *       });
+     *
+     *   // Simple callback style
+     *   $router->group(function (Router $r) {
+     *       $r->get('/health', $handler, 'health');
+     *   });
      */
-    public function group(callable $callback): RouteGroup
+    public function group(?callable $callback = null): RouteGroup
     {
         $group = new RouteGroup($this);
+
+        if ($callback !== null) {
+            // No extra attributes configured on the group itself;
+            // just execute the callback inside the current router context.
+            $group->group($callback);
+        }
+
         return $group;
     }
 

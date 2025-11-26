@@ -137,15 +137,20 @@ class RouteGroup
      */
     private function addRoute(string $method, string $path, callable $handler, ?string $name): void
     {
-        $fullPath = $this->prefix . '/' . ltrim($path, '/');
+        // Let the router handle the current prefix.
+        // Just make sure the local path is normalized.
+        $normalizedPath = $path === '/'
+            ? '/'
+            : '/' . ltrim($path, '/');
 
         $this->router->add(
             $method,
-            $fullPath,
+            $normalizedPath,
             $handler,
             $name,
             $this->middleware,
             $this->where
         );
     }
+
 }
