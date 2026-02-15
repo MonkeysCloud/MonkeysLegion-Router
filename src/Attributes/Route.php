@@ -46,8 +46,8 @@ final class Route
         // Normalize to upper-case array
         $this->methods = array_map('strtoupper', (array) $this->methods);
 
-        // Ensure leading slash
-        $this->path = '/' . ltrim($this->path, '/');
+        // Ensure leading slash (but keep empty path as empty for clean prefix concatenation)
+        $this->path = $this->path === '' ? '' : '/' . ltrim($this->path, '/');
     }
 
     /**

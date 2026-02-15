@@ -234,6 +234,7 @@ class Router
                 $meta = $attr->newInstance();
 
                 $fullPath = $controllerPrefix . $meta->path;
+                $fullPath = rtrim($fullPath, '/') ?: '/';
                 $middleware = array_merge($methodMiddleware, $meta->middleware);
 
                 // Register for each HTTP method
@@ -353,6 +354,8 @@ class Router
     {
         $method = strtoupper($request->getMethod());
         $path = $request->getUri()->getPath();
+        // Normalize trailing slashes so /foo/ matches /foo
+        $path = $path !== '/' ? rtrim($path, '/') : $path;
         $allowedMethods = [];
 
         foreach ($this->routes->all() as $route) {

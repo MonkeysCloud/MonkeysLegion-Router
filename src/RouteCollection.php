@@ -51,6 +51,9 @@ class RouteCollection
         string $domain = '',
         array $meta = []
     ): void {
+        // Normalize trailing slashes (keep root '/')
+        $path = $path !== '/' ? rtrim($path, '/') : $path;
+
         $paramNames = [];
         $optionalParams = [];
         $constraints = $constraints ?: [];
