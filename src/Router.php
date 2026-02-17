@@ -703,13 +703,13 @@ class Router
      */
     private function handleNotFound(ServerRequestInterface $request): ResponseInterface
     {
-        $method = $request->getMethod();
+        $method = strtoupper($request->getMethod());
         $path   = $request->getUri()->getPath();
 
         $this->logger?->notice('Route not found', [
             'method' => $method,
             'path'   => $path,
-            'uri'    => (string) $request->getUri(),
+            'host'   => $request->getUri()->getHost(),
         ]);
 
         if ($this->notFoundHandler) {
@@ -730,7 +730,7 @@ class Router
      */
     private function handleMethodNotAllowed(ServerRequestInterface $request, array $allowedMethods): ResponseInterface
     {
-        $method = $request->getMethod();
+        $method = strtoupper($request->getMethod());
         $path   = $request->getUri()->getPath();
         $allow  = implode(', ', $allowedMethods);
 
@@ -738,7 +738,7 @@ class Router
             'method'          => $method,
             'path'            => $path,
             'allowed_methods' => $allowedMethods,
-            'uri'             => (string) $request->getUri(),
+            'host'            => $request->getUri()->getHost(),
         ]);
 
         if ($this->methodNotAllowedHandler) {
