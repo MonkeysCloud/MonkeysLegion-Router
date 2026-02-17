@@ -11,9 +11,9 @@ use Psr\Http\Message\ResponseInterface;
 /**
  * CORS middleware for handling cross-origin requests.
  *
- * v2.2: updated to PSR-15 aligned {@see MiddlewareInterface}.
+ * v2.2: implements the PSR-15 aligned {@see Psr15MiddlewareInterface}.
  */
-class CorsMiddleware implements MiddlewareInterface
+class CorsMiddleware implements Psr15MiddlewareInterface
 {
     public function __construct(
         private array $config = []

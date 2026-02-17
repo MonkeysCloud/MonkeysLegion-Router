@@ -10,22 +10,22 @@ use Psr\Http\Message\ResponseInterface;
  * Middleware pipeline that processes a chain of middleware.
  *
  * v2.2 improvements:
- *  - PSR-15 aligned: uses {@see RequestHandlerInterface} throughout.
+ *  - Accepts both {@see Psr15MiddlewareInterface} and the legacy
+ *    {@see MiddlewareInterface} (`callable $next`) transparently.
  *  - **Priority ordering**: middleware with higher priority runs first.
- *  - **Legacy support**: v2.0 middleware (callable $next) is auto-adapted.
- *  - Accepts both {@see MiddlewareInterface} instances and legacy objects.
+ *  - **Legacy support**: v2.0 middleware is accepted without adaptation.
  */
 class MiddlewarePipeline
 {
     /**
-     * @var array<array{middleware: MiddlewareInterface, priority: int}>
+     * @var array<array{middleware: Psr15MiddlewareInterface|MiddlewareInterface, priority: int}>
      */
     private array $stack = [];
 
     private bool $sorted = true;
 
     /**
-     * @param array<MiddlewareInterface|object> $middleware
+     * @param array<Psr15MiddlewareInterface|MiddlewareInterface|object> $middleware
      */
     public function __construct(array $middleware = [])
     {
@@ -37,8 +37,12 @@ class MiddlewarePipeline
     /**
      * Add middleware to the pipeline.
      *
-     * @param MiddlewareInterface|object $middleware  PSR-15 or legacy middleware
-     * @param int                        $priority    Higher = runs earlier (default 0)
+     * Accepts:
+     *  - {@see Psr15MiddlewareInterface} (new PSR-15 style)
+     *  - {@see MiddlewareInterface} (legacy callable $next style)
+     *  - Any object with a `process()` method (auto-adapted to legacy interface)
+     *
+     * @param int $priority  Higher = runs earlier (default 0)
      */
     public function pipe(object $middleware, int $priority = 0): self
     {
@@ -58,7 +62,7 @@ class MiddlewarePipeline
      * Process the request through the middleware pipeline.
      *
      * @param ServerRequestInterface $request
-     * @param callable               $finalHandler  The route handler (callable style, auto-adapted)
+     * @param callable               $finalHandler  The route handler (callable style)
      * @return ResponseInterface
      */
     public function process(ServerRequestInterface $request, callable $finalHandler): ResponseInterface
@@ -70,17 +74,37 @@ class MiddlewarePipeline
         // Build the handler chain from inside out
         foreach (array_reverse($this->stack) as $entry) {
             $mw = $entry['middleware'];
-            $handler = new class($mw, $handler) implements RequestHandlerInterface {
-                public function __construct(
-                    private readonly MiddlewareInterface $middleware,
-                    private readonly RequestHandlerInterface $next,
-                ) {}
 
-                public function handle(ServerRequestInterface $request): ResponseInterface
-                {
-                    return $this->middleware->process($request, $this->next);
-                }
-            };
+            if ($mw instanceof Psr15MiddlewareInterface) {
+                // New PSR-15 middleware — pass RequestHandlerInterface
+                $handler = new class($mw, $handler) implements RequestHandlerInterface {
+                    public function __construct(
+                        private readonly Psr15MiddlewareInterface $middleware,
+                        private readonly RequestHandlerInterface $next,
+                    ) {}
+
+                    public function handle(ServerRequestInterface $request): ResponseInterface
+                    {
+                        return $this->middleware->process($request, $this->next);
+                    }
+                };
+            } else {
+                // Legacy MiddlewareInterface — pass callable $next
+                $handler = new class($mw, $handler) implements RequestHandlerInterface {
+                    public function __construct(
+                        private readonly MiddlewareInterface $middleware,
+                        private readonly RequestHandlerInterface $next,
+                    ) {}
+
+                    public function handle(ServerRequestInterface $request): ResponseInterface
+                    {
+                        return $this->middleware->process(
+                            $request,
+                            fn(ServerRequestInterface $req) => $this->next->handle($req)
+                        );
+                    }
+                };
+            }
         }
 
         return $handler->handle($request);
@@ -88,8 +112,6 @@ class MiddlewarePipeline
 
     /**
      * Create a new pipeline from an array of middleware.
-     *
-     * @param array<MiddlewareInterface|object> $middleware
      */
     public static function from(array $middleware): self
     {
@@ -97,22 +119,29 @@ class MiddlewarePipeline
     }
 
     /**
-     * Adapt legacy or PSR-15 middleware into the current interface.
+     * Adapt objects into one of the accepted interfaces.
      */
-    private function adapt(object $middleware): MiddlewareInterface
+    private function adapt(object $middleware): Psr15MiddlewareInterface|MiddlewareInterface
     {
+        // Already implements PSR-15 interface
+        if ($middleware instanceof Psr15MiddlewareInterface) {
+            return $middleware;
+        }
+
+        // Already implements legacy interface
         if ($middleware instanceof MiddlewareInterface) {
             return $middleware;
         }
 
-        // Check for legacy process(request, callable) signature
+        // Check for a process() method on plain objects → wrap as legacy
         if (method_exists($middleware, 'process')) {
             return new LegacyMiddlewareAdapter($middleware);
         }
 
         throw new \InvalidArgumentException(
             sprintf(
-                'Middleware must implement %s or have a process() method. Got: %s',
+                'Middleware must implement %s or %s, or have a process() method. Got: %s',
+                Psr15MiddlewareInterface::class,
                 MiddlewareInterface::class,
                 get_class($middleware)
             )

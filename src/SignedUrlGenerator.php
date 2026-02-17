@@ -48,13 +48,26 @@ class SignedUrlGenerator
             $query['expires'] = (string)(time() + $expiration);
         }
 
-        // Generate the base URL first without signature
+        // Generate the base URL — if a custom baseUrl is provided,
+        // temporarily set it on the UrlGenerator
+        $previousBase = null;
+        if ($baseUrl !== '') {
+            $previousBase = $this->urlGenerator->getBaseUrl();
+            $this->urlGenerator->setBaseUrl($baseUrl);
+        }
+
         $url = $this->urlGenerator->generate(
             $routeName,
             $parameters,
-            $baseUrl !== '',
-            $baseUrl ?: null
+            $baseUrl !== ''
         );
+
+        // Restore previous base URL
+        if ($previousBase !== null) {
+            $this->urlGenerator->setBaseUrl($previousBase);
+        } elseif ($baseUrl !== '') {
+            $this->urlGenerator->setBaseUrl('');
+        }
 
         if (!empty($query)) {
             $separator = str_contains($url, '?') ? '&' : '?';

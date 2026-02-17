@@ -9,6 +9,7 @@ use MonkeysLegion\Router\Attributes\Route as RouteAttribute;
 use MonkeysLegion\Router\Attributes\RoutePrefix;
 use MonkeysLegion\Router\Attributes\Middleware as MiddlewareAttribute;
 use MonkeysLegion\Router\Middleware\MiddlewareInterface;
+use MonkeysLegion\Router\Middleware\Psr15MiddlewareInterface;
 use MonkeysLegion\Router\Middleware\MiddlewarePipeline;
 use MonkeysLegion\Router\Middleware\LegacyMiddlewareAdapter;
 use MonkeysLegion\Router\TrailingSlashStrategy;
@@ -245,9 +246,7 @@ class Router
      */
     public function resource(string $prefix, object $controller): RouteRegistrar
     {
-        $registrar = new RouteRegistrar($this, $prefix, $controller);
-        $registrar->register();
-        return $registrar;
+        return new RouteRegistrar($this, $prefix, $controller);
     }
 
     /**
@@ -257,9 +256,7 @@ class Router
      */
     public function apiResource(string $prefix, object $controller): RouteRegistrar
     {
-        $registrar = RouteRegistrar::api($this, $prefix, $controller);
-        $registrar->register();
-        return $registrar;
+        return RouteRegistrar::api($this, $prefix, $controller);
     }
 
     /**
@@ -383,12 +380,15 @@ class Router
             $middleware = $this->instantiateMiddleware($middleware);
         }
 
-        // Adapt legacy middleware transparently
-        if (!$middleware instanceof MiddlewareInterface && is_object($middleware)) {
+        // Accept both Psr15MiddlewareInterface and legacy MiddlewareInterface
+        if (!$middleware instanceof Psr15MiddlewareInterface
+            && !$middleware instanceof MiddlewareInterface
+            && is_object($middleware)
+        ) {
             if (method_exists($middleware, 'process')) {
                 $middleware = new LegacyMiddlewareAdapter($middleware);
             } else {
-                throw new InvalidArgumentException("Middleware must implement MiddlewareInterface or have a process() method.");
+                throw new InvalidArgumentException("Middleware must implement MiddlewareInterface or Psr15MiddlewareInterface, or have a process() method.");
             }
         }
 
@@ -420,7 +420,7 @@ class Router
      * passed to the middleware if it implements a `setParameters()` method
      * or accepts constructor arguments.
      */
-    private function resolveMiddleware(string $name): ?MiddlewareInterface
+    private function resolveMiddleware(string $name): Psr15MiddlewareInterface|MiddlewareInterface|null
     {
         // Parse parameters: 'throttle:60,1' → name = 'throttle', params = ['60', '1']
         $params = [];
@@ -429,9 +429,9 @@ class Router
             $params = explode(',', $paramStr);
         }
 
-        // Check if it's a registered middleware
+        // Check if it's a registered middleware — clone to avoid mutation
         if (isset($this->middleware[$name])) {
-            $mw = $this->middleware[$name];
+            $mw = clone $this->middleware[$name];
             $this->applyParameters($mw, $params);
             return $mw;
         }
@@ -444,20 +444,19 @@ class Router
         // Try resolving from DI container
         if ($this->container !== null && $this->container->has($name)) {
             $instance = $this->container->get($name);
-            if ($instance instanceof MiddlewareInterface) {
+            if ($instance instanceof Psr15MiddlewareInterface || $instance instanceof MiddlewareInterface) {
                 $this->applyParameters($instance, $params);
                 return $instance;
             }
             if (is_object($instance) && method_exists($instance, 'process')) {
-                $adapted = new LegacyMiddlewareAdapter($instance);
-                return $adapted;
+                return new LegacyMiddlewareAdapter($instance);
             }
         }
 
         // Try to instantiate as class name
         if (class_exists($name)) {
             $instance = $this->instantiateMiddleware($name, $params);
-            if ($instance instanceof MiddlewareInterface) {
+            if ($instance instanceof Psr15MiddlewareInterface || $instance instanceof MiddlewareInterface) {
                 return $instance;
             }
             if (is_object($instance) && method_exists($instance, 'process')) {

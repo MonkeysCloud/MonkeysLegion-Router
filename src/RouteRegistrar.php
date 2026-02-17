@@ -7,6 +7,10 @@ namespace MonkeysLegion\Router;
  * Fluent route registrar that provides convenience methods
  * for registering CRUD resource routes.
  *
+ * Registration is **deferred** — routes are only added when `register()`
+ * is called explicitly, or when the registrar is destructed.  This allows
+ * fluent chaining of `only()` / `except()` before registration occurs.
+ *
  * Usage:
  *   $router->resource('/photos', PhotoController::class);          // Full CRUD
  *   $router->apiResource('/photos', PhotoController::class);       // API CRUD (no create/edit forms)
@@ -39,6 +43,7 @@ class RouteRegistrar
     private string $prefix;
     private object $controller;
     private string $resourceName;
+    private bool $registered = false;
 
     /**
      * @param Router       $router
@@ -63,6 +68,16 @@ class RouteRegistrar
     }
 
     /**
+     * Auto-register when the registrar goes out of scope (if not already).
+     */
+    public function __destruct()
+    {
+        if (!$this->registered) {
+            $this->register();
+        }
+    }
+
+    /**
      * Register only the specified actions.
      */
     public function only(array $actions): self
@@ -83,10 +98,16 @@ class RouteRegistrar
     /**
      * Register the configured resource routes.
      *
-     * Called automatically at destruct if not called explicitly.
+     * May be called explicitly; is also called by __destruct() if not
+     * already registered.
      */
     public function register(): void
     {
+        if ($this->registered) {
+            return;
+        }
+        $this->registered = true;
+
         foreach ($this->actions as $action) {
             if (!isset(self::RESOURCE_MAP[$action])) {
                 continue;

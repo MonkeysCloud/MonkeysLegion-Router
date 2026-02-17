@@ -11,6 +11,7 @@ use MonkeysLegion\Router\Middleware\CallableHandlerAdapter;
 use MonkeysLegion\Router\Middleware\CorsMiddleware;
 use MonkeysLegion\Router\Middleware\LegacyMiddlewareAdapter;
 use MonkeysLegion\Router\Middleware\MiddlewareInterface;
+use MonkeysLegion\Router\Middleware\Psr15MiddlewareInterface;
 use MonkeysLegion\Router\Middleware\MiddlewarePipeline;
 use MonkeysLegion\Router\Middleware\RequestHandlerInterface;
 use PHPUnit\Framework\TestCase;
@@ -43,7 +44,7 @@ class MiddlewarePipelineTest extends TestCase
 
     public function testNewMiddlewareInterfaceReceivesHandler(): void
     {
-        $mw = new class implements MiddlewareInterface {
+        $mw = new class implements Psr15MiddlewareInterface {
             public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
             {
                 $response = $handler->handle($request);
@@ -113,7 +114,7 @@ class MiddlewarePipelineTest extends TestCase
     {
         // Use headers to track execution order since anonymous classes
         // cannot accept by-reference arrays in PHP 8.4
-        $mw1 = new class implements MiddlewareInterface {
+        $mw1 = new class implements Psr15MiddlewareInterface {
             public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
             {
                 $response = $handler->handle($request);
@@ -122,7 +123,7 @@ class MiddlewarePipelineTest extends TestCase
             }
         };
 
-        $mw2 = new class implements MiddlewareInterface {
+        $mw2 = new class implements Psr15MiddlewareInterface {
             public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
             {
                 $response = $handler->handle($request);
@@ -131,7 +132,7 @@ class MiddlewarePipelineTest extends TestCase
             }
         };
 
-        $mw3 = new class implements MiddlewareInterface {
+        $mw3 = new class implements Psr15MiddlewareInterface {
             public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
             {
                 $response = $handler->handle($request);
@@ -180,7 +181,7 @@ class MiddlewarePipelineTest extends TestCase
     public function testCorsMiddlewareImplementsNewInterface(): void
     {
         $cors = new CorsMiddleware();
-        $this->assertInstanceOf(MiddlewareInterface::class, $cors);
+        $this->assertInstanceOf(Psr15MiddlewareInterface::class, $cors);
     }
 
     public function testCorsMiddlewareAddHeaders(): void
@@ -220,7 +221,7 @@ class MiddlewarePipelineTest extends TestCase
 
     public function testPipeMethodIsFluent(): void
     {
-        $mw = new class implements MiddlewareInterface {
+        $mw = new class implements Psr15MiddlewareInterface {
             public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
             {
                 return $handler->handle($request);
