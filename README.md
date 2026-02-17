@@ -33,6 +33,7 @@ A comprehensive, production-grade HTTP router for PHP 8.4+ with PSR-15 middlewar
 ✅ **Resource Routes** — `resource()` / `apiResource()` CRUD shortcuts  
 ✅ **Route Debugger** — ASCII table listing with filtering  
 ✅ **Signed URLs** — HMAC-signed URLs with optional expiration  
+✅ **PSR-3 Logging** — Automatic 404/405 logging via optional `LoggerInterface`  
 ✅ **Custom Error Handlers** — Customizable 404 and 405 responses  
 ✅ **Route Caching** — Compiled routes for production performance  
 ✅ **PSR-7 Compatible** — Full PSR-7 HTTP message support
@@ -362,6 +363,39 @@ $cache->clear();
 $stats = $cache->getStats();
 ```
 
+## PSR-3 Logger Integration
+
+The router can automatically log routing events when a PSR-3 compatible logger is provided:
+
+```php
+use Psr\Log\LoggerInterface;
+
+// Any PSR-3 logger (MonkeysLegion Logger, Monolog, etc.)
+$router->setLogger($logger);
+```
+
+**What gets logged:**
+
+| Event | Level | Context |
+|-------|-------|---------|
+| Route not found (404) | `notice` | method, path, uri |
+| Method not allowed (405) | `warning` | method, path, allowed_methods, uri |
+
+**Default error responses** (when no custom handler is set) are now informative:
+
+```
+404 Not Found
+
+The requested URL "/nonexistent" was not found on this server.
+```
+
+```
+405 Method Not Allowed
+
+The GET method is not allowed for "/api/users".
+Allowed methods: POST, PUT
+```
+
 ## Custom Error Handlers
 
 ```php
@@ -391,6 +425,9 @@ $router->setMethodNotAllowedHandler(
     }
 );
 ```
+
+> **Note:** Logging happens *before* custom handlers are called, so you always
+> get logs even when using custom error responses.
 
 ## Built-in Middleware
 
