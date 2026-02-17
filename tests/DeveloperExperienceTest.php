@@ -89,9 +89,8 @@ class DeveloperExperienceTest extends TestCase
         $req = new ServerRequest('GET', new Uri('http://localhost/photos'), Stream::createFromString(''));
         $this->assertEquals(200, $router->dispatch($req)->getStatusCode());
 
-        // /photos/create should 404 (not registered)
+        // /photos/create matches the show route with id=create (no separate create route in API)
         $req = new ServerRequest('GET', new Uri('http://localhost/photos/create'), Stream::createFromString(''));
-        // This will match show with id=create, which is expected for apiResource
         $this->assertEquals(200, $router->dispatch($req)->getStatusCode());
     }
 

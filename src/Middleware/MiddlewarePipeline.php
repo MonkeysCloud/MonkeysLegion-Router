@@ -24,6 +24,8 @@ class MiddlewarePipeline
 
     private bool $sorted = true;
 
+    private int $insertionIndex = 0;
+
     /**
      * @param array<Psr15MiddlewareInterface|MiddlewareInterface|object> $middleware
      */
@@ -51,6 +53,7 @@ class MiddlewarePipeline
         $this->stack[] = [
             'middleware' => $adapted,
             'priority'   => $priority,
+            'index'      => $this->insertionIndex++,
         ];
 
         $this->sorted = false;
@@ -149,7 +152,8 @@ class MiddlewarePipeline
     }
 
     /**
-     * Sort by priority (higher first) — stable sort preserves insertion order for equal priorities.
+     * Sort by priority (higher first). Stable: entries with equal priority
+     * preserve their insertion order via the index tie-breaker.
      */
     private function sort(): void
     {
@@ -157,7 +161,10 @@ class MiddlewarePipeline
             return;
         }
 
-        usort($this->stack, static fn(array $a, array $b): int => $b['priority'] <=> $a['priority']);
+        usort($this->stack, static function (array $a, array $b): int {
+            return $b['priority'] <=> $a['priority']
+                ?: $a['index'] <=> $b['index'];
+        });
         $this->sorted = true;
     }
 }

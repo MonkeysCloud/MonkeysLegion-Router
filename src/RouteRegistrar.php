@@ -12,8 +12,8 @@ namespace MonkeysLegion\Router;
  * fluent chaining of `only()` / `except()` before registration occurs.
  *
  * Usage:
- *   $router->resource('/photos', PhotoController::class);          // Full CRUD
- *   $router->apiResource('/photos', PhotoController::class);       // API CRUD (no create/edit forms)
+ *   $router->resource('/photos', new PhotoController());           // Full CRUD
+ *   $router->apiResource('/photos', new PhotoController());        // API CRUD (no create/edit forms)
  *   $router->resource('/photos', $ctrl)->only(['index', 'show']);   // Subset
  *   $router->resource('/photos', $ctrl)->except(['destroy']);       // Inverted subset
  */

@@ -598,6 +598,10 @@ class Router
         // ── OPTIONS auto-response ────────────────────────────────────
         if ($method === 'OPTIONS' && !empty($allowedMethods)) {
             $allowedMethods[] = 'OPTIONS';
+            // HEAD is always available when GET is (auto-delegation)
+            if (in_array('GET', $allowedMethods, true) && !in_array('HEAD', $allowedMethods, true)) {
+                $allowedMethods[] = 'HEAD';
+            }
             $uniqueMethods = array_unique($allowedMethods);
             sort($uniqueMethods);
 
@@ -768,6 +772,10 @@ class Router
 
     /**
      * Instantiate a middleware class, optionally with parameters.
+     *
+     * Note: parameters parsed from strings like "throttle:60,1" are forwarded
+     * as raw strings. Middleware constructors with typed parameters (int, float)
+     * should accept strings and cast internally, or use setParameters() instead.
      */
     private function instantiateMiddleware(string $class, array $params = []): object
     {

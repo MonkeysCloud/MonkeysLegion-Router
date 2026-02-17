@@ -151,16 +151,12 @@ class MiddlewarePipelineTest extends TestCase
             fn($req) => (new Response(Stream::createFromString('ok'), 200))
         );
 
-        // Middleware wraps inside-out: mw3 (highest) is outermost,
-        // so its header append happens LAST (after mw1 and mw2).
-        // Inner execution order: mw2 → mw1 → mw3
+        // Middleware wraps inside-out: mw3 (highest priority=20) is outermost,
+        // mw1 (priority=10) is middle, mw2 (priority=5) is innermost.
+        // Inner-to-outer response decoration order: mw2 → mw1 → mw3
         $order = ltrim($response->getHeaderLine('X-Order'), ',');
         $parts = explode(',', $order);
-        $this->assertCount(3, $parts);
-        // All three middlewares executed
-        $this->assertContains('mw1', $parts);
-        $this->assertContains('mw2', $parts);
-        $this->assertContains('mw3', $parts);
+        $this->assertSame(['mw2', 'mw1', 'mw3'], $parts);
     }
 
     // ─── Empty pipeline ──────────────────────────────────────────────

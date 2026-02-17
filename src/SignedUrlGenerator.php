@@ -4,7 +4,6 @@ declare(strict_types=1);
 namespace MonkeysLegion\Router;
 
 use InvalidArgumentException;
-use RuntimeException;
 
 /**
  * Generate and validate signed (tamper-proof) URLs.
@@ -15,7 +14,7 @@ use RuntimeException;
  *   $signed = $signedUrl->generate('verify-email', ['id' => 42], expiration: 3600);
  *   // → /verify-email/42?expires=1700000000&signature=abc123…
  *
- *   $signedUrl->validate($request);  // throws on invalid/expired signature
+ *   $isValid = $signedUrl->validate($signed);  // true if signature is valid and not expired
  */
 class SignedUrlGenerator
 {
@@ -90,6 +89,9 @@ class SignedUrlGenerator
     public function validate(string $url): bool
     {
         $parts = parse_url($url);
+        if ($parts === false) {
+            return false;
+        }
         $query = [];
         parse_str($parts['query'] ?? '', $query);
 
