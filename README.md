@@ -14,9 +14,9 @@ A comprehensive, production-grade HTTP router for PHP 8.4+ with PSR-15 middlewar
 ✅ **Method Handlers** — `get()`, `post()`, `put()`, `delete()`, `patch()`, `options()`  
 
 ### Middleware (PSR-15)
-✅ **PSR-15 Compatible** — `MiddlewareInterface` + `RequestHandlerInterface`  
-✅ **Priority-Based Ordering** — Middleware runs in priority order  
-✅ **Legacy Adapter** — v2.0 callable-style middleware auto-adapted  
+✅ **Dual Interface Support** — `Psr15MiddlewareInterface` (new) + `MiddlewareInterface` (legacy `callable $next`)  
+✅ **Priority-Based Ordering** — Stable sort, higher priority runs first  
+✅ **Legacy Adapter** — v2.0 callable-style middleware auto-adapted transparently  
 ✅ **Parameterized Middleware** — `throttle:60,1` parsed automatically  
 ✅ **DI Container Support** — Lazy middleware resolution via PSR-11  
 ✅ **CORS Middleware** — Configurable origins, methods, headers, credentials  
@@ -179,13 +179,15 @@ $router->get('/posts/{category}/{page:\d+?}', $handler);
 
 ## Middleware
 
-### PSR-15 Middleware (v2.2+)
+### PSR-15 Middleware (v2.2+ — recommended)
+
+New middleware should implement `Psr15MiddlewareInterface`:
 
 ```php
-use MonkeysLegion\Router\Middleware\MiddlewareInterface;
+use MonkeysLegion\Router\Middleware\Psr15MiddlewareInterface;
 use MonkeysLegion\Router\Middleware\RequestHandlerInterface;
 
-class AuthMiddleware implements MiddlewareInterface
+class AuthMiddleware implements Psr15MiddlewareInterface
 {
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
@@ -201,19 +203,23 @@ class AuthMiddleware implements MiddlewareInterface
 $router->registerMiddleware('auth', AuthMiddleware::class);
 ```
 
-### Legacy Middleware (v2.0 — still supported)
+### Legacy Middleware (v2.0 — still fully supported)
 
-Existing v2.0 middleware using `callable $next` is automatically adapted:
+Existing v2.0 middleware using `callable $next` implements the original `MiddlewareInterface` and is handled transparently by the pipeline:
 
 ```php
-// This still works — auto-wrapped by LegacyMiddlewareAdapter
-class OldMiddleware
+use MonkeysLegion\Router\Middleware\MiddlewareInterface;
+
+// v2.0 middleware — still works without any changes
+class OldMiddleware implements MiddlewareInterface
 {
     public function process(ServerRequestInterface $request, callable $next): ResponseInterface
     {
         return $next($request);
     }
 }
+
+// Plain objects with a process(request, callable) method are also auto-adapted
 ```
 
 ### Middleware Priority
@@ -599,7 +605,7 @@ public function index() { }
 1. **Use Route Caching in Production** — Significantly improves performance
 2. **Group Related Routes** — Keep your routing organized
 3. **Use Named Routes** — Makes URL generation easier and refactoring safer
-4. **Use PSR-15 Middleware** — New code should use `MiddlewareInterface` with `RequestHandlerInterface`
+4. **Use PSR-15 Middleware** — New code should use `Psr15MiddlewareInterface` with `RequestHandlerInterface`; legacy `MiddlewareInterface` (`callable $next`) is still fully supported
 5. **Use Constraints** — Validate parameters early in the request lifecycle
 6. **Use Resource Routes** — `resource()` / `apiResource()` reduce boilerplate
 7. **Set a Trailing-Slash Strategy** — Choose `STRIP`, `REDIRECT_301`, or `ALLOW_BOTH` globally
@@ -624,7 +630,7 @@ public function index() { }
 
 ```bash
 composer test
-# 53 tests, 102 assertions
+# 53 tests, 99 assertions
 ```
 
 ## License
