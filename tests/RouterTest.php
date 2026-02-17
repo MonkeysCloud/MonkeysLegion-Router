@@ -162,7 +162,10 @@ class RouterTest extends TestCase
 
         $this->assertEquals(405, $response->getStatusCode());
         $this->assertTrue($response->hasHeader('Allow'));
-        $this->assertEquals('GET', $response->getHeaderLine('Allow'));
+        // v2.2: HEAD is auto-included when GET is registered (per RFC 7231)
+        $allow = $response->getHeaderLine('Allow');
+        $this->assertStringContainsString('GET', $allow);
+        $this->assertStringContainsString('HEAD', $allow);
     }
 
     public function testNotFound(): void
