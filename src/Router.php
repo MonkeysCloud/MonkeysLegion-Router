@@ -16,6 +16,7 @@ use MonkeysLegion\Router\TrailingSlashStrategy;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
 use InvalidArgumentException;
 
 /**
@@ -76,6 +77,9 @@ class Router
     /** @var callable|null Fallback handler (catch-all) */
     private $fallbackHandler = null;
 
+    /** @var LoggerInterface|null PSR-3 logger for routing events (404/405) */
+    private ?LoggerInterface $logger = null;
+
     public function __construct(
         private RouteCollection $routes
     ) {
@@ -98,6 +102,18 @@ class Router
     public function setTrailingSlashStrategy(TrailingSlashStrategy $strategy): void
     {
         $this->trailingSlashStrategy = $strategy;
+    }
+
+    /**
+     * Set a PSR-3 logger for routing events (404, 405, etc.).
+     *
+     * When set, the router will automatically log:
+     *  - `notice` for 404 Not Found
+     *  - `warning` for 405 Method Not Allowed
+     */
+    public function setLogger(LoggerInterface $logger): void
+    {
+        $this->logger = $logger;
     }
 
     /**
@@ -687,12 +703,23 @@ class Router
      */
     private function handleNotFound(ServerRequestInterface $request): ResponseInterface
     {
+        $method = $request->getMethod();
+        $path   = $request->getUri()->getPath();
+
+        $this->logger?->notice('Route not found', [
+            'method' => $method,
+            'path'   => $path,
+            'uri'    => (string) $request->getUri(),
+        ]);
+
         if ($this->notFoundHandler) {
             return call_user_func($this->notFoundHandler, $request);
         }
 
+        $body = "404 Not Found\n\nThe requested URL \"{$path}\" was not found on this server.";
+
         return new Response(
-            Stream::createFromString('404 Not Found'),
+            Stream::createFromString($body),
             404,
             ['Content-Type' => 'text/plain']
         );
@@ -703,16 +730,31 @@ class Router
      */
     private function handleMethodNotAllowed(ServerRequestInterface $request, array $allowedMethods): ResponseInterface
     {
+        $method = $request->getMethod();
+        $path   = $request->getUri()->getPath();
+        $allow  = implode(', ', $allowedMethods);
+
+        $this->logger?->warning('Method not allowed', [
+            'method'          => $method,
+            'path'            => $path,
+            'allowed_methods' => $allowedMethods,
+            'uri'             => (string) $request->getUri(),
+        ]);
+
         if ($this->methodNotAllowedHandler) {
             return call_user_func($this->methodNotAllowedHandler, $request, $allowedMethods);
         }
 
+        $body = "405 Method Not Allowed\n\n"
+              . "The {$method} method is not allowed for \"{$path}\".\n"
+              . "Allowed methods: {$allow}";
+
         return new Response(
-            Stream::createFromString('405 Method Not Allowed'),
+            Stream::createFromString($body),
             405,
             [
                 'Content-Type' => 'text/plain',
-                'Allow' => implode(', ', $allowedMethods),
+                'Allow'        => $allow,
             ]
         );
     }
