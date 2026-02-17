@@ -10,8 +10,10 @@ use Psr\Http\Message\ResponseInterface;
 
 /**
  * CORS middleware for handling cross-origin requests.
+ *
+ * v2.2: implements the PSR-15 aligned {@see Psr15MiddlewareInterface}.
  */
-class CorsMiddleware implements MiddlewareInterface
+class CorsMiddleware implements Psr15MiddlewareInterface
 {
     public function __construct(
         private array $config = []
@@ -26,15 +28,15 @@ class CorsMiddleware implements MiddlewareInterface
         ], $config);
     }
 
-    public function process(ServerRequestInterface $request, callable $next): ResponseInterface
+    public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
         // Handle preflight OPTIONS request
         if ($request->getMethod() === 'OPTIONS') {
             return $this->handlePreflightRequest($request);
         }
 
-        // Process the request
-        $response = $next($request);
+        // Process the request through the next handler
+        $response = $handler->handle($request);
 
         // Add CORS headers to the response
         return $this->addCorsHeaders($request, $response);

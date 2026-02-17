@@ -38,6 +38,14 @@ class UrlGenerator
     }
 
     /**
+     * Get the current base URL.
+     */
+    public function getBaseUrl(): string
+    {
+        return $this->baseUrl;
+    }
+
+    /**
      * Generate a URL for a named route
      *
      * @param string $name       Route name

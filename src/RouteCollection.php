@@ -59,27 +59,37 @@ class RouteCollection
         $constraints = $constraints ?: [];
 
         // Extract inline constraints from path: {id:\d+} or {id:int}
+        // Also detect greedy/catch-all parameters: {path+}
+        $greedyParams = [];
         $path = preg_replace_callback(
-            '/\{([^}:?]+):([^}?]+)(\?)?\}/',
-            function ($matches) use (&$constraints) {
+            '/\{([^}:?+]+)([+])?:?([^}?]*)(\?)?\}/',
+            function ($matches) use (&$constraints, &$greedyParams) {
                 $paramName = $matches[1];
-                $constraint = $matches[2];
-                $isOptional = isset($matches[3]);
+                $isGreedy = !empty($matches[2]);
+                $constraint = $matches[3] ?? '';
+                $isOptional = !empty($matches[4]);
 
-                $constraints[$paramName] = $constraint;
+                if ($isGreedy) {
+                    $greedyParams[] = $paramName;
+                }
 
-                return '{' . $paramName . ($isOptional ? '?' : '') . '}';
+                if ($constraint !== '') {
+                    $constraints[$paramName] = $constraint;
+                }
+
+                return '{' . $paramName . ($isGreedy ? '+' : '') . ($isOptional ? '?' : '') . '}';
             },
             $path
         );
 
         // Convert path to regex with parameter capture groups
         $regex = preg_replace_callback(
-            '/(\/?)(\{([^}?]+)(\?)?\})/',
-            function (array $matches) use (&$paramNames, &$optionalParams, $constraints) {
+            '/(\/?)(\{([^}?+]+)([+])?(\?)?\})/',
+            function (array $matches) use (&$paramNames, &$optionalParams, $constraints, $greedyParams) {
                 $leadingSlash = $matches[1];
                 $paramName = $matches[3];
-                $isOptional = isset($matches[4]);
+                $isGreedy = !empty($matches[4]);
+                $isOptional = !empty($matches[5]);
 
                 $paramNames[] = $paramName;
 
@@ -88,10 +98,14 @@ class RouteCollection
                 }
 
                 // Get constraint pattern
-                $pattern = '[^/]+';
-                if (isset($constraints[$paramName])) {
+                if ($isGreedy || in_array($paramName, $greedyParams, true)) {
+                    // Greedy/catch-all: match everything including slashes
+                    $pattern = '.+';
+                } elseif (isset($constraints[$paramName])) {
                     $constraint = RouteConstraints::get($constraints[$paramName]);
                     $pattern = $constraint->getPattern();
+                } else {
+                    $pattern = '[^/]+';
                 }
 
                 $capture = '(?P<' . $paramName . '>' . $pattern . ')';
@@ -258,6 +272,22 @@ class RouteCollection
     public function getMethods(): array
     {
         return array_unique(array_map(fn($route) => $route['method'], $this->routes));
+    }
+
+    /**
+     * Get all HTTP methods registered for a given path.
+     *
+     * Used internally for OPTIONS auto-response and 405 handling.
+     */
+    public function getMethodsForPath(string $path): array
+    {
+        $methods = [];
+        foreach ($this->all() as $route) {
+            if (preg_match($route['regex'], $path)) {
+                $methods[] = $route['method'];
+            }
+        }
+        return array_unique($methods);
     }
 
     /**
