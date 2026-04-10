@@ -16,6 +16,7 @@ final class EmailConstraint implements RouteConstraintInterface
 
     public function getPattern(): string
     {
-        return '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}';
+        // Anchored pattern without overlapping quantifiers to prevent ReDoS
+        return '[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}';
     }
 }

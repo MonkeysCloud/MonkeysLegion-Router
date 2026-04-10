@@ -187,7 +187,6 @@ final class ControllerScanner
                 : '/' . $this->deriveResourceName($ref->getShortName());
 
             $param     = $resource->parameter;
-            $paramPath = "/{$param}:{$resource->constraint}}";
 
             $actionMap = [
                 'index'   => ['method' => 'GET',    'suffix' => ''],
@@ -225,8 +224,16 @@ final class ControllerScanner
      */
     private function resolveClassName(string $filePath, string $baseDir, string $baseNamespace): ?string
     {
-        $relative = str_replace($baseDir, '', $filePath);
-        $relative = ltrim(str_replace('/', '\\', $relative), '\\');
+        // Normalize directory separators for cross-platform compatibility
+        $filePath = str_replace(DIRECTORY_SEPARATOR, '/', $filePath);
+        $baseDir  = rtrim(str_replace(DIRECTORY_SEPARATOR, '/', $baseDir), '/') . '/';
+
+        if (!str_starts_with($filePath, $baseDir)) {
+            return null;
+        }
+
+        $relative = substr($filePath, strlen($baseDir));
+        $relative = str_replace('/', '\\', $relative);
 
         if (!str_ends_with($relative, '.php')) {
             return null;
@@ -242,8 +249,12 @@ final class ControllerScanner
     private function deriveResourceName(string $shortName): string
     {
         $name = preg_replace('/Controller$/', '', $shortName);
-        // PascalCase → kebab-case then pluralize simply
-        $kebab = strtolower(preg_replace('/[A-Z]/', '-$0', lcfirst($name)));
+        // PascalCase → kebab-case (handles consecutive uppercase, e.g. HTTPClient → http-client)
+        $kebab = strtolower(preg_replace(
+            ['/([A-Z]+)([A-Z][a-z])/', '/([a-z0-9])([A-Z])/'],
+            ['$1-$2', '$1-$2'],
+            lcfirst($name),
+        ));
         return $kebab . 's';
     }
 }

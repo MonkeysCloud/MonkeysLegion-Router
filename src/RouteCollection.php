@@ -67,6 +67,13 @@ final class RouteCollection
         $method = strtoupper($method);
         $path   = $path !== '/' ? rtrim($path, '/') : $path;
 
+        // Reject paths containing null bytes or control characters
+        if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $path) === 1) {
+            throw new InvalidArgumentException(
+                'Route path must not contain null bytes or control characters.'
+            );
+        }
+
         // Normalize handler: callable must become Closure or array for property storage
         if (!is_array($handler) && !$handler instanceof \Closure) {
             $handler = \Closure::fromCallable($handler);

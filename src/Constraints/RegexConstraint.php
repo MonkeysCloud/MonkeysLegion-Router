@@ -13,7 +13,14 @@ final class RegexConstraint implements RouteConstraintInterface
 {
     public function __construct(
         private readonly string $pattern,
-    ) {}
+    ) {
+        // Validate the regex pattern to prevent injection of malformed patterns
+        if (@preg_match('#^' . $pattern . '$#', '') === false) {
+            throw new \InvalidArgumentException(
+                "Invalid regex constraint pattern: {$pattern}"
+            );
+        }
+    }
 
     public function matches(string $value): bool
     {

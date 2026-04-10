@@ -114,7 +114,11 @@ final class SignedUrlGenerator
         }
 
         // Reconstruct URL without signature
-        $baseUrl = ($parts['scheme'] ?? '') . '://' . ($parts['host'] ?? '') . ($parts['path'] ?? '');
+        $baseUrl = ($parts['scheme'] ?? '') . '://' . ($parts['host'] ?? '');
+        if (isset($parts['port'])) {
+            $baseUrl .= ':' . $parts['port'];
+        }
+        $baseUrl .= ($parts['path'] ?? '');
         if ($query !== []) {
             $baseUrl .= '?' . http_build_query($query);
         }

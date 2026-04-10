@@ -59,17 +59,25 @@ final class CompiledRoutes
     {
         $allowed = [];
 
+        // O(m) static lookup where m = number of HTTP methods
         foreach ($this->staticMap as $method => $paths) {
             if (isset($paths[$path])) {
                 $allowed[] = $method;
             }
         }
 
-        foreach ($this->dynamicMap as $method => $routes) {
-            foreach ($routes as $route) {
-                if (preg_match($route->regex, $path)) {
-                    $allowed[] = $method;
-                    break;
+        // Only scan dynamic routes if static didn't cover all methods
+        if ($this->dynamicMap !== []) {
+            foreach ($this->dynamicMap as $method => $routes) {
+                // Skip if already found via static
+                if (in_array($method, $allowed, true)) {
+                    continue;
+                }
+                foreach ($routes as $route) {
+                    if (preg_match($route->regex, $path)) {
+                        $allowed[] = $method;
+                        break;
+                    }
                 }
             }
         }

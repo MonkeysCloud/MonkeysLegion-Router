@@ -237,7 +237,7 @@ final class Router
 
     public function any(string $path, array|callable|\Closure $handler, ?string $name = null): void
     {
-        foreach (['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'] as $method) {
+        foreach (['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'] as $method) {
             $this->add($method, $path, $handler, $name !== null ? $name . '.' . strtolower($method) : null);
         }
     }
@@ -516,8 +516,10 @@ final class Router
             return ($this->notFoundHandler)($request);
         }
 
+        $safePath = htmlspecialchars($path, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
         return new Response(
-            Stream::createFromString("404 Not Found\n\nThe requested URL \"{$path}\" was not found on this server."),
+            Stream::createFromString("404 Not Found\n\nThe requested URL \"{$safePath}\" was not found on this server."),
             404,
             ['Content-Type' => 'text/plain'],
         );
@@ -540,9 +542,12 @@ final class Router
             return ($this->methodNotAllowedHandler)($request, $allowedMethods);
         }
 
+        $safePath   = htmlspecialchars($path, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $safeMethod = htmlspecialchars($method, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
         return new Response(
             Stream::createFromString(
-                "405 Method Not Allowed\n\nThe {$method} method is not allowed for \"{$path}\".\nAllowed methods: {$allow}"
+                "405 Method Not Allowed\n\nThe {$safeMethod} method is not allowed for \"{$safePath}\".\nAllowed methods: {$allow}"
             ),
             405,
             ['Content-Type' => 'text/plain', 'Allow' => $allow],

@@ -32,8 +32,12 @@ final readonly class GroupContext
 
     public function withPrefix(string $prefix): self
     {
+        $combined = $this->prefix . '/' . ltrim($prefix, '/');
+        // Normalize multiple slashes
+        $combined = preg_replace('#/{2,}#', '/', $combined);
+
         return new self(
-            $this->prefix . '/' . ltrim($prefix, '/'),
+            $combined,
             $this->middleware,
             $this->constraints,
             $this->domain,
@@ -82,6 +86,8 @@ final readonly class GroupContext
     public function applyPath(string $path): string
     {
         $full = $this->prefix . '/' . ltrim($path, '/');
+        // Normalize multiple slashes
+        $full = preg_replace('#/{2,}#', '/', $full);
         return $full !== '/' ? rtrim($full, '/') : '/';
     }
 }

@@ -13,12 +13,15 @@ namespace MonkeysLegion\Router\Constraints;
  */
 final class RouteConstraints
 {
+    /** @var array<string, RouteConstraintInterface> Cached constraint instances. */
+    private static array $cache = [];
+
     /**
      * Get a constraint by shorthand name or raw regex pattern.
      */
     public static function get(string $constraint): RouteConstraintInterface
     {
-        return match ($constraint) {
+        return self::$cache[$constraint] ??= match ($constraint) {
             'int', 'integer'                => new IntegerConstraint(),
             'numeric'                       => new NumericConstraint(),
             'alpha'                         => new AlphaConstraint(),
@@ -31,5 +34,13 @@ final class RouteConstraints
             'ip'                            => new IpConstraint(),
             default                         => new RegexConstraint($constraint),
         };
+    }
+
+    /**
+     * Clear the constraint cache (useful in tests).
+     */
+    public static function clearCache(): void
+    {
+        self::$cache = [];
     }
 }
