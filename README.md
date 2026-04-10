@@ -1,684 +1,254 @@
-# MonkeysLegion Router
+# MonkeysLegion Router v2
 
-A comprehensive, production-grade HTTP router for PHP 8.4+ with PSR-15 middleware, attribute-based routing, resource CRUD shortcuts, and advanced dispatch features.
+High-performance, attribute-driven HTTP router for the MonkeysLegion framework.
+
+**PHP 8.4+ required** • PSR-7/15 compliant • Compiled trie matching
 
 ## Features
 
-### Core Routing
-✅ **Attribute-Based Routing** — PHP 8 attributes on controller methods  
-✅ **Named Routes** — URL generation from route names  
-✅ **Route Constraints** — Built-in + custom parameter validation  
-✅ **Route Groups** — Shared prefixes, middleware, and domain constraints  
-✅ **Optional Parameters** — Optional route segments  
-✅ **Catch-All / Wildcard Routes** — `{path+}` greedy parameter capture  
-✅ **Method Handlers** — `get()`, `post()`, `put()`, `delete()`, `patch()`, `options()`  
-
-### Middleware (PSR-15)
-✅ **Dual Interface Support** — `Psr15MiddlewareInterface` (new) + `MiddlewareInterface` (legacy `callable $next`)  
-✅ **Priority-Based Ordering** — Stable sort, higher priority runs first  
-✅ **Legacy Adapter** — v2.0 callable-style middleware auto-adapted transparently  
-✅ **Parameterized Middleware** — `throttle:60,1` parsed automatically  
-✅ **DI Container Support** — Lazy middleware resolution via PSR-11  
-✅ **CORS Middleware** — Configurable origins, methods, headers, credentials  
-
-### Dispatch Engine
-✅ **HEAD Auto-Delegation** — HEAD automatically delegates to GET, strips body  
-✅ **OPTIONS Auto-Response** — Returns `Allow` header listing available methods  
-✅ **Trailing-Slash Strategy** — Configurable: `STRIP`, `REDIRECT_301`, `ALLOW_BOTH`  
-✅ **Domain Constraints** — Host/subdomain enforcement with pattern capture  
-✅ **Fallback Handler** — Catch-all for unmatched routes  
-✅ **Redirect Routes** — Convenience `redirect()` method  
-
-### Developer Experience
-✅ **Resource Routes** — `resource()` / `apiResource()` CRUD shortcuts  
-✅ **Route Debugger** — ASCII table listing with filtering  
-✅ **Signed URLs** — HMAC-signed URLs with optional expiration  
-✅ **PSR-3 Logging** — Automatic 404/405 logging via optional `LoggerInterface`  
-✅ **Custom Error Handlers** — Customizable 404 and 405 responses  
-✅ **Route Caching** — Compiled routes for production performance  
-✅ **PSR-7 Compatible** — Full PSR-7 HTTP message support
+| Feature | Description |
+|---|---|
+| **Compiled Trie Matching** | O(1) static path lookup, O(k) regex for parametric routes, method-indexed |
+| **PSR-15 Middleware** | Pure `Psr\Http\Server\MiddlewareInterface` pipeline, priority-based, cursor dispatch |
+| **Attribute-Driven** | `#[Route]`, `#[RoutePrefix]`, `#[Middleware]`, `#[ApiResource]`, `#[Throttle]`, `#[WithoutMiddleware]` |
+| **Controller Auto-Scanning** | Zero-config directory scanning for annotated controllers |
+| **Auto-CRUD** | `#[ApiResource]` generates 5 RESTful routes automatically |
+| **Route Model Binding** | Objects with `id`, `getRouteKey()`, or `BackedEnum` auto-resolved in URL generation |
+| **Signed URLs** | HMAC-SHA256 signed URLs with expiration support |
+| **Route Cache** | Compiled routes cached as PHP files with OPcache warm-up |
+| **Rate Limiting** | Per-route `#[Throttle]` attribute with IP/user/route strategies |
+| **HEAD/OPTIONS** | Automatic HEAD delegation and OPTIONS responses |
+| **Domain Constraints** | Per-route or per-group domain restrictions |
+| **Route Debugger** | CLI-friendly route listing, filtering, and `match()` testing |
 
 ## Installation
 
 ```bash
-composer require monkeyscloud/monkeyslegion-router
+composer require monkeyscloud/monkeyslegion-router "^2.0"
 ```
 
 ## Quick Start
 
-### Basic Routes
-
 ```php
+<?php
+declare(strict_types=1);
+
 use MonkeysLegion\Router\Router;
 use MonkeysLegion\Router\RouteCollection;
-use Psr\Http\Message\ServerRequestInterface;
 
 $router = new Router(new RouteCollection());
 
-// Simple GET route
-$router->get('/users', function (ServerRequestInterface $request) {
-    return new Response(
-        Stream::createFromString(json_encode(['users' => []])),
-        200,
-        ['Content-Type' => 'application/json']
-    );
-});
+$router->get('/users', fn($req) => new Response(
+    Stream::createFromString(json_encode(['users' => []])),
+    200,
+    ['Content-Type' => 'application/json'],
+), 'users.index');
 
-// Route with parameter
-$router->get('/users/{id}', function (ServerRequestInterface $request, string $id) {
-    return new Response(
-        Stream::createFromString("User ID: {$id}")
-    );
-});
+$router->get('/users/{id:\d+}', fn($req, $id) => new Response(
+    Stream::createFromString(json_encode(['id' => $id])),
+    200,
+), 'users.show');
 
-// POST route
-$router->post('/users', function (ServerRequestInterface $request) {
-    // Handle user creation
-});
+$response = $router->dispatch($request);
 ```
 
-### Attribute-Based Controllers
+## Attribute-Driven Controllers
 
 ```php
-use MonkeysLegion\Router\Attributes\Route;
-use MonkeysLegion\Router\Attributes\RoutePrefix;
-use MonkeysLegion\Router\Attributes\Middleware;
-
-#[RoutePrefix('/api/users')]
-#[Middleware(['cors', 'throttle'])]
-class UserController
+#[RoutePrefix('/api/v2/users')]
+#[Middleware(['cors', 'throttle:60,1'])]
+final class UserController
 {
-    #[Route('GET', '/', name: 'users.index')]
+    #[Route('GET', '/', name: 'users.index', summary: 'List users', tags: ['Users'])]
     public function index(ServerRequestInterface $request): Response
     {
-        // List users
+        return UserResource::collection($this->users->paginate())->toResponse();
     }
 
     #[Route('GET', '/{id:\d+}', name: 'users.show')]
     public function show(ServerRequestInterface $request, string $id): Response
     {
-        // Show user
+        return UserResource::make($this->users->findOrFail((int) $id))->toResponse();
     }
 
-    #[Route('POST', '/', name: 'users.create')]
-    #[Middleware('auth')]
-    public function create(ServerRequestInterface $request): Response
+    #[Route('POST', '/', name: 'users.store')]
+    #[Throttle(max: 10, per: 60)]
+    public function store(CreateUserRequest $dto): Response
     {
-        // Create user
+        return UserResource::make($this->users->create($dto))->toResponse(status: 201);
     }
 }
-
-// Register controller
-$router->registerController(new UserController());
 ```
 
-## Route Constraints
-
-### Built-in Constraints
+## #[ApiResource] Auto-CRUD
 
 ```php
-// Integer constraint
-$router->get('/users/{id:\d+}', $handler);
-$router->get('/users/{id:int}', $handler);
-
-// Slug constraint
-$router->get('/posts/{slug:[a-z0-9-]+}', $handler);
-$router->get('/posts/{slug:slug}', $handler);
-
-// UUID constraint
-$router->get('/items/{uuid:uuid}', $handler);
-
-// Email constraint
-$router->get('/verify/{email:email}', $handler);
-
-// Numeric constraint
-$router->get('/price/{amount:numeric}', $handler);
-
-// Alphabetic constraint
-$router->get('/category/{name:alpha}', $handler);
-
-// Alphanumeric constraint
-$router->get('/code/{code:alphanum}', $handler);
-```
-
-### Custom Constraints
-
-```php
-use MonkeysLegion\Router\Constraints\RouteConstraintInterface;
-
-class DateConstraint implements RouteConstraintInterface
+#[ApiResource(prefix: '/photos', parameter: 'photo', only: ['index', 'show', 'store', 'update', 'destroy'])]
+final class PhotoController
 {
-    public function matches(string $value): bool
-    {
-        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) === 1;
-    }
-
-    public function getPattern(): string
-    {
-        return '\d{4}-\d{2}-\d{2}';
-    }
+    public function index(ServerRequestInterface $req): Response { /* ... */ }
+    public function show(ServerRequestInterface $req, string $photo): Response { /* ... */ }
+    public function store(ServerRequestInterface $req): Response { /* ... */ }
+    public function update(ServerRequestInterface $req, string $photo): Response { /* ... */ }
+    public function destroy(ServerRequestInterface $req, string $photo): Response { /* ... */ }
 }
-
-// Use custom regex directly
-$router->get('/archive/{date:\d{4}-\d{2}-\d{2}}', $handler);
 ```
 
-## Optional Parameters
+Generates:
+- `GET /photos` → `photos.index`
+- `GET /photos/{photo:\d+}` → `photos.show`
+- `POST /photos` → `photos.store`
+- `PUT /photos/{photo:\d+}` → `photos.update`
+- `DELETE /photos/{photo:\d+}` → `photos.destroy`
+
+## Controller Auto-Scanning
 
 ```php
-// Optional page parameter
-$router->get('/posts/{page?}', function (ServerRequestInterface $request, ?string $page = '1') {
-    // Handle pagination
-});
-
-// Multiple optional parameters
-$router->get('/archive/{year}/{month?}/{day?}', $handler);
-
-// With constraints
-$router->get('/posts/{category}/{page:\d+?}', $handler);
+$scanner = new ControllerScanner($router);
+$scanner->scan(__DIR__ . '/app/Controller', 'App\\Controller');
 ```
 
-## Middleware
-
-### PSR-15 Middleware (v2.2+ — recommended)
-
-New middleware should implement `Psr15MiddlewareInterface`:
-
-```php
-use MonkeysLegion\Router\Middleware\Psr15MiddlewareInterface;
-use MonkeysLegion\Router\Middleware\RequestHandlerInterface;
-
-class AuthMiddleware implements Psr15MiddlewareInterface
-{
-    public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
-    {
-        if (!$this->isAuthenticated($request)) {
-            return new Response(Stream::createFromString('Unauthorized'), 401);
-        }
-        
-        return $handler->handle($request);
-    }
-}
-
-// Register by name
-$router->registerMiddleware('auth', AuthMiddleware::class);
-```
-
-### Legacy Middleware (v2.0 — still fully supported)
-
-Existing v2.0 middleware using `callable $next` implements the original `MiddlewareInterface` and is handled transparently by the pipeline:
-
-```php
-use MonkeysLegion\Router\Middleware\MiddlewareInterface;
-
-// v2.0 middleware — still works without any changes
-class OldMiddleware implements MiddlewareInterface
-{
-    public function process(ServerRequestInterface $request, callable $next): ResponseInterface
-    {
-        return $next($request);
-    }
-}
-
-// Plain objects with a process(request, callable) method are also auto-adapted
-```
-
-### Middleware Priority
-
-```php
-use MonkeysLegion\Router\Middleware\MiddlewarePipeline;
-
-$pipeline = new MiddlewarePipeline();
-$pipeline->pipe($corsMiddleware, 100);   // Runs first (highest priority)
-$pipeline->pipe($authMiddleware, 50);
-$pipeline->pipe($loggingMiddleware, 10); // Runs last
-```
-
-### Parameterized Middleware
-
-```php
-// Middleware string with parameters: "throttle:60,1"
-// Parsed automatically — 60 requests per 1 minute
-$router->add('GET', '/api/data', $handler, middleware: ['throttle:60,1']);
-```
-
-### DI Container Integration
-
-```php
-// Set a PSR-11 container for lazy middleware resolution
-$router->setContainer($container);
-
-// Middleware registered as class-string is resolved via container
-$router->registerMiddleware('auth', AuthMiddleware::class);
-```
-
-### Middleware Groups
-
-```php
-$router->registerMiddlewareGroup('api', ['cors', 'throttle', 'json']);
-$router->registerMiddlewareGroup('web', ['cors', 'csrf']);
-
-$router->add('GET', '/api/users', $handler, 'users.index', ['api']);
-```
-
-### Global Middleware
-
-```php
-$router->addGlobalMiddleware('cors');
-$router->addGlobalMiddleware('logging');
-```
-
-### Route Middleware
-
-```php
-$router->add('GET', '/admin', $handler, 'admin.dashboard', ['auth']);
-$router->add('POST', '/api/posts', $handler, 'posts.create', ['auth', 'throttle']);
-
-// With attributes
-#[Route('GET', '/admin', middleware: ['auth', 'admin'])]
-public function dashboard() { }
-```
+All classes with `#[Route]` or `#[ApiResource]` attributes are automatically registered.
 
 ## Route Groups
 
 ```php
-// Group with prefix
-$router->group(function (Router $router) {
-    $router->get('/users', $usersHandler);
-    $router->get('/posts', $postsHandler);
-})
-->prefix('/api/v1')
-->middleware(['cors', 'throttle'])
-->group(fn() => null);
-
-// Nested groups
-$router->group(function (Router $router) {
-    $router->group(function (Router $router) {
-        $router->get('/dashboard', $dashboardHandler);
-        $router->get('/settings', $settingsHandler);
-    })
-    ->middleware(['admin'])
-    ->group(fn() => null);
-})
-->prefix('/admin')
-->middleware(['auth'])
-->group(fn() => null);
-
-// Routes will be: /admin/dashboard, /admin/settings
-// Middleware stack: ['auth', 'admin']
+$router->group()
+    ->prefix('/api/v2')
+    ->middleware('auth')
+    ->domain('api.example.com')
+    ->group(function (Router $r) {
+        $r->get('/users', $handler, 'api.users.index');
+        $r->post('/users', $handler, 'api.users.store');
+    });
 ```
 
-## Named Routes & URL Generation
+## Middleware
 
 ```php
-// Define named routes
-$router->get('/users', $handler, 'users.index');
-$router->get('/users/{id}', $handler, 'users.show');
-$router->get('/posts/{slug}', $handler, 'posts.show');
+// Register named middleware
+$router->registerMiddleware('auth', new AuthMiddleware(), priority: 100);
+$router->registerMiddleware('cors', new CorsMiddleware(), priority: 200);
 
-// Generate URLs
-$urlGen = $router->getUrlGenerator();
-$urlGen->setBaseUrl('https://example.com');
+// Middleware groups
+$router->registerMiddlewareGroup('api', ['cors', 'auth']);
 
-echo $router->url('users.index');
-// Output: /users
+// Global middleware (runs on every request)
+$router->addGlobalMiddleware('timing');
 
-echo $router->url('users.show', ['id' => 123]);
-// Output: /users/123
-
-echo $router->url('users.show', ['id' => 123], true);
-// Output: https://example.com/users/123
-
-// Extra parameters become query string
-echo $router->url('posts.show', ['slug' => 'hello', 'preview' => 1]);
-// Output: /posts/hello?preview=1
-```
-
-## Route Caching
-
-```php
-use MonkeysLegion\Router\RouteCache;
-
-$cache = new RouteCache(__DIR__ . '/cache');
-$collection = new RouteCollection();
-
-// Load from cache if available
-if ($cache->has()) {
-    $data = $cache->load();
-    $collection->import($data);
-} else {
-    // Register all routes
-    $router = new Router($collection);
-    // ... register routes ...
-    
-    // Save to cache
-    $exported = $collection->export();
-    $cache->save($exported['routes'], $exported['namedRoutes']);
+// Per-method exclusion (unique to MonkeysLegion):
+#[Middleware('auth')]
+class AdminController
+{
+    #[Route('GET', '/login')]
+    #[WithoutMiddleware('auth')]  // Login doesn't need auth
+    public function login(): Response { /* ... */ }
 }
-
-// Clear cache
-$cache->clear();
-
-// Check cache stats
-$stats = $cache->getStats();
 ```
 
-## PSR-3 Logger Integration
-
-The router can automatically log routing events when a PSR-3 compatible logger is provided:
+## URL Generation
 
 ```php
-use Psr\Log\LoggerInterface;
+$router->url('users.show', ['id' => 42]);
+// → /users/42
 
-// Any PSR-3 logger (MonkeysLegion Logger, Monolog, etc.)
-$router->setLogger($logger);
+// Model binding
+$router->url('users.show', ['id' => $userEntity]);
+// → /users/{entity->id}
+
+// Absolute URLs
+$router->getUrlGenerator()->baseUrl = 'https://api.example.com';
+$router->url('users.index', absolute: true);
+// → https://api.example.com/users
 ```
 
-**What gets logged:**
-
-| Event | Level | Context |
-|-------|-------|---------|
-| Route not found (404) | `notice` | method, path, uri |
-| Method not allowed (405) | `warning` | method, path, allowed_methods, uri |
-
-**Default error responses** (when no custom handler is set) are now informative:
-
-```
-404 Not Found
-
-The requested URL "/nonexistent" was not found on this server.
-```
-
-```
-405 Method Not Allowed
-
-The GET method is not allowed for "/api/users".
-Allowed methods: POST, PUT
-```
-
-## Custom Error Handlers
+## Signed URLs
 
 ```php
-// Custom 404 handler
-$router->setNotFoundHandler(function (ServerRequestInterface $request) {
-    return new Response(
-        Stream::createFromString(json_encode(['error' => 'Not Found'])),
-        404,
-        ['Content-Type' => 'application/json']
-    );
-});
+$signed = new SignedUrlGenerator($router->getUrlGenerator(), $secret);
 
-// Custom 405 handler
-$router->setMethodNotAllowedHandler(
-    function (ServerRequestInterface $request, array $allowedMethods) {
-        return new Response(
-            Stream::createFromString(json_encode([
-                'error' => 'Method Not Allowed',
-                'allowed' => $allowedMethods
-            ])),
-            405,
-            [
-                'Content-Type' => 'application/json',
-                'Allow' => implode(', ', $allowedMethods)
-            ]
-        );
-    }
-);
+$url = $signed->generate('verify-email', ['id' => 42], expiration: 3600);
+$signed->validate($url); // true
+
+$url = $signed->temporarySignedRoute('download', 300, ['file' => 'report.pdf']);
 ```
 
-> **Note:** Logging happens *before* custom handlers are called, so you always
-> get logs even when using custom error responses.
+## Route Constraints
 
-## Built-in Middleware
-
-### CORS Middleware
+Built-in constraints: `int`, `uuid`, `ulid`, `slug`, `alpha`, `alphanumeric`, `date`, `ip`, `email`, `numeric`.
 
 ```php
-use MonkeysLegion\Router\Middleware\CorsMiddleware;
-
-$cors = new CorsMiddleware([
-    'allowed_origins' => ['https://example.com', 'https://app.example.com'],
-    'allowed_methods' => ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    'allowed_headers' => ['Content-Type', 'Authorization', 'X-Requested-With'],
-    'exposed_headers' => ['X-Total-Count'],
-    'max_age' => 86400,
-    'credentials' => true,
-]);
-
-$router->registerMiddleware('cors', $cors);
+$router->get('/users/{id:int}', $handler);
+$router->get('/posts/{uuid:uuid}', $handler);
+$router->get('/articles/{slug:slug}', $handler);
+$router->get('/events/{date:date}', $handler);
+$router->get('/records/{ulid:ulid}', $handler);
 ```
 
-### Throttle Middleware
+## Route Cache
 
 ```php
-use MonkeysLegion\Router\Middleware\ThrottleMiddleware;
+$cache = new RouteCache('/var/cache/routes');
 
-// 60 requests per minute
-$throttle = new ThrottleMiddleware(60, 1);
-$router->registerMiddleware('throttle', $throttle);
+if ($cache->has() && !$cache->isStale($sourceFiles)) {
+    $compiled = $cache->load();
+    $router->loadCompiled($compiled);
+} else {
+    // Register routes...
+    $router->compile();
+    $cache->save($router->getCompiledRoutes());
+}
 ```
 
-## Advanced Features
-
-### All HTTP Methods
+## Route Debugging
 
 ```php
-$router->get($path, $handler);      // GET
-$router->post($path, $handler);     // POST
-$router->put($path, $handler);      // PUT
-$router->patch($path, $handler);    // PATCH
-$router->delete($path, $handler);   // DELETE
-$router->options($path, $handler);  // OPTIONS
-
-// Multiple methods
-$router->match(['GET', 'POST'], $path, $handler);
-
-// Any method
-$router->any($path, $handler);
-```
-
-### HEAD & OPTIONS Auto-Handling
-
-```php
-// HEAD requests automatically delegate to the matching GET handler,
-// with the response body stripped (per RFC 7231)
-$router->get('/data', $handler);
-// HEAD /data → 200, empty body, same headers as GET
-
-// OPTIONS requests automatically return an Allow header
-// listing all methods registered for that path
-// OPTIONS /data → Allow: GET, HEAD, OPTIONS
-```
-
-### Trailing-Slash Strategy
-
-```php
-use MonkeysLegion\Router\TrailingSlashStrategy;
-
-// Default: strip trailing slashes (matches /users and /users/)
-$router->setTrailingSlashStrategy(TrailingSlashStrategy::STRIP);
-
-// 301 redirect from /users/ → /users
-$router->setTrailingSlashStrategy(TrailingSlashStrategy::REDIRECT_301);
-
-// Match both /users and /users/ without redirect
-$router->setTrailingSlashStrategy(TrailingSlashStrategy::ALLOW_BOTH);
-```
-
-### Catch-All / Wildcard Routes
-
-```php
-// {param+} captures everything including slashes
-$router->get('/files/{path+}', function ($request, string $path) {
-    // GET /files/docs/readme.md → $path = "docs/readme.md"
-    return serveFile($path);
-});
-```
-
-### Domain / Host Constraints
-
-```php
-// Literal domain
-$router->add('GET', '/dashboard', $handler, domain: 'admin.example.com');
-
-// Pattern with parameter capture
-$router->add('GET', '/home', $handler, domain: '{tenant}.app.com');
-// Matches: acme.app.com/home, corp.app.com/home, etc.
-```
-
-### Fallback Handler
-
-```php
-// Catch all unmatched routes (custom 404)
-$router->fallback(function ($request) {
-    return new Response(Stream::createFromString('Page not found'), 404);
-});
-```
-
-### Redirect Routes
-
-```php
-// Convenience redirect
-$router->redirect('/old-page', '/new-page', 301);
-$router->redirect('/legacy', '/modern');  // 302 by default
-```
-
-### Resource / CRUD Routes
-
-```php
-// Full resource: index, create, store, show, edit, update, destroy
-$router->resource('/photos', new PhotoController());
-
-// API-only: index, store, show, update, destroy (no create/edit forms)
-$router->apiResource('/photos', new PhotoController());
-
-// Filter actions
-$router->resource('/photos', $ctrl)->only(['index', 'show']);
-$router->resource('/photos', $ctrl)->except(['destroy']);
-```
-
-Registered routes are automatically named: `photos.index`, `photos.show`, `photos.store`, etc.
-
-### Route Debugger
-
-```php
-use MonkeysLegion\Router\RouteDebugger;
-
 $debugger = new RouteDebugger($router);
 
 // ASCII table output
 echo $debugger->render();
-// +--------+-------------------+----------------------+------------+--------+
-// | Method | URI               | Name                 | Middleware | Domain |
-// +--------+-------------------+----------------------+------------+--------+
-// | GET    | /                 | home                 |            |        |
-// | GET    | /users/{id}       | users.show           | auth       |        |
-// | POST   | /api/users        | api.users.store      | auth, cors |        |
-// +--------+-------------------+----------------------+------------+--------+
+
+// Test a specific request (like Symfony's router:match)
+$result = $debugger->match('GET', '/users/42');
+// ['matched' => true, 'route' => [...], 'params' => ['id' => '42']]
 
 // Filter routes
-$debugger->filter(method: 'POST');               // Only POST routes
-$debugger->filter(pathContains: '/api');          // Routes containing /api
-$debugger->filter(name: 'users');                 // Routes named *users*
-
-// Structured data
-$routes = $debugger->list();                     // Array of route maps
+$getRoutes = $debugger->filter(method: 'GET');
+$apiRoutes = $debugger->filter(pathContains: '/api');
 ```
 
-### Signed URLs
+## Per-Route Rate Limiting
 
 ```php
-use MonkeysLegion\Router\SignedUrlGenerator;
-
-$signed = new SignedUrlGenerator($router->getUrlGenerator(), 'your-secret-key-here');
-
-// Generate a signed URL (never expires)
-$url = $signed->generate('verify-email', ['id' => 42]);
-// → /verify-email/42?signature=abc123…
-
-// With expiration (1 hour)
-$url = $signed->generate('download', ['file' => 'report'], expiration: 3600);
-// → /download/report?expires=1700003600&signature=def456…
-
-// Validate
-$isValid = $signed->validate($urlFromRequest);  // true/false
+#[Route('POST', '/login')]
+#[Throttle(max: 5, per: 300, by: 'ip')]  // 5 attempts per 5 minutes per IP
+public function login(): Response { /* ... */ }
 ```
 
-### Dispatching Requests
+The `RouteRateLimiter` middleware reads `#[Throttle]` and returns `429 Too Many Requests` with `Retry-After` and rate limit headers.
 
-```php
-use Psr\Http\Message\ServerRequestInterface;
+## Architecture
 
-$request = /* PSR-7 ServerRequest */;
-$response = $router->dispatch($request);
-
-// Send response
-header('HTTP/1.1 ' . $response->getStatusCode());
-foreach ($response->getHeaders() as $name => $values) {
-    foreach ($values as $value) {
-        header("$name: $value", false);
-    }
-}
-echo $response->getBody();
 ```
-
-### Route Metadata
-
-```php
-#[Route(
-    'GET',
-    '/users',
-    name: 'users.index',
-    summary: 'List all users',
-    description: 'Returns a paginated list of users',
-    tags: ['Users', 'API'],
-    meta: ['version' => '1.0', 'deprecated' => false]
-)]
-public function index() { }
+Router (dispatch)
+  ├── RouteCollection (registration, regex compilation)
+  ├── RouteCompiler (splits static/dynamic, method-indexes)
+  ├── CompiledRoutes (O(1) static + O(k) dynamic matching)
+  ├── MiddlewarePipeline (PSR-15, cursor-based, priority-sorted)
+  ├── ControllerScanner (directory auto-discovery)
+  ├── UrlGenerator (named routes, model binding)
+  ├── SignedUrlGenerator (HMAC signed URLs)
+  ├── RouteCache (OPcache-warm compiled routes)
+  └── RouteDebugger (listing, matching, filtering)
 ```
-
-## Best Practices
-
-1. **Use Route Caching in Production** — Significantly improves performance
-2. **Group Related Routes** — Keep your routing organized
-3. **Use Named Routes** — Makes URL generation easier and refactoring safer
-4. **Use PSR-15 Middleware** — New code should use `Psr15MiddlewareInterface` with `RequestHandlerInterface`; legacy `MiddlewareInterface` (`callable $next`) is still fully supported
-5. **Use Constraints** — Validate parameters early in the request lifecycle
-6. **Use Resource Routes** — `resource()` / `apiResource()` reduce boilerplate
-7. **Set a Trailing-Slash Strategy** — Choose `STRIP`, `REDIRECT_301`, or `ALLOW_BOTH` globally
-8. **Set Base URL** — Configure the URL generator for absolute URL generation
-
-## Performance Tips
-
-- Enable route caching in production environments
-- Use specific HTTP methods instead of `any()`
-- Order routes from most specific to least specific (done automatically)
-- Use constraints to reduce regex complexity
-- Minimize global middleware
-- Use middleware priority to ensure expensive middleware runs only when needed
-
-## Requirements
-
-- PHP 8.4 or higher
-- PSR-7 HTTP Message implementation
-- MonkeysLegion HTTP package
 
 ## Testing
 
 ```bash
 composer test
-# 53 tests, 99 assertions
+# 81 tests, 156 assertions
 ```
 
 ## License
 
-MIT License. See LICENSE file for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Support
-
-For issues, questions, or contributions, please visit:
-https://github.com/MonkeysCloud/MonkeysLegion-Skeleton
+MIT © MonkeysCloud Team

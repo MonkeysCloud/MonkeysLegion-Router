@@ -3,33 +3,34 @@ declare(strict_types=1);
 
 namespace MonkeysLegion\Router\Middleware;
 
-use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Server\RequestHandlerInterface;
 
 /**
- * Adapts a plain callable into a {@see RequestHandlerInterface}.
+ * MonkeysLegion Framework — Router Package
  *
- * This is the backward-compatibility bridge: existing code that passes
- * `callable $next` to middleware (v2.0 style) is transparently wrapped
- * so that the new PSR-15–aligned pipeline works without changes.
+ * Adapts a plain callable into a PSR-15 RequestHandlerInterface.
+ *
+ * Bridge for route handlers that are plain functions/closures
+ * so the middleware pipeline can use a single interface.
  *
  * @internal
+ * @copyright 2026 MonkeysCloud Team
+ * @license   MIT
  */
 final class CallableHandlerAdapter implements RequestHandlerInterface
 {
     /** @var callable(ServerRequestInterface): ResponseInterface */
-    private $callable;
+    private $handler;
 
-    /**
-     * @param callable(ServerRequestInterface): ResponseInterface $callable
-     */
-    public function __construct(callable $callable)
+    public function __construct(callable $handler)
     {
-        $this->callable = $callable;
+        $this->handler = $handler;
     }
 
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
-        return ($this->callable)($request);
+        return ($this->handler)($request);
     }
 }

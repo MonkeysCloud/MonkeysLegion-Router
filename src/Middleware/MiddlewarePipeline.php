@@ -3,31 +3,34 @@ declare(strict_types=1);
 
 namespace MonkeysLegion\Router\Middleware;
 
-use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Server\MiddlewareInterface;
+use Psr\Http\Server\RequestHandlerInterface;
 
 /**
- * Middleware pipeline that processes a chain of middleware.
+ * MonkeysLegion Framework — Router Package
  *
- * v2.2 improvements:
- *  - Accepts both {@see Psr15MiddlewareInterface} and the legacy
- *    {@see MiddlewareInterface} (`callable $next`) transparently.
- *  - **Priority ordering**: middleware with higher priority runs first.
- *  - **Legacy support**: v2.0 middleware is accepted without adaptation.
+ * PSR-15 middleware pipeline with priority ordering.
+ *
+ * v2 changes:
+ *  • Accepts only `Psr\Http\Server\MiddlewareInterface` (no legacy).
+ *  • Cursor-based dispatch — zero anonymous class allocations.
+ *  • `lock()` pre-sorts the stack for zero-cost per-request dispatch.
+ *
+ * @copyright 2026 MonkeysCloud Team
+ * @license   MIT
  */
-class MiddlewarePipeline
+final class MiddlewarePipeline
 {
-    /**
-     * @var array<array{middleware: Psr15MiddlewareInterface|MiddlewareInterface, priority: int}>
-     */
+    /** @var list<array{mw: MiddlewareInterface, priority: int, index: int}> */
     private array $stack = [];
 
-    private bool $sorted = true;
-
-    private int $insertionIndex = 0;
+    private bool $locked = false;
+    private int  $insertionIndex = 0;
 
     /**
-     * @param array<Psr15MiddlewareInterface|MiddlewareInterface|object> $middleware
+     * @param list<MiddlewareInterface> $middleware
      */
     public function __construct(array $middleware = [])
     {
@@ -39,82 +42,56 @@ class MiddlewarePipeline
     /**
      * Add middleware to the pipeline.
      *
-     * Accepts:
-     *  - {@see Psr15MiddlewareInterface} (new PSR-15 style)
-     *  - {@see MiddlewareInterface} (legacy callable $next style)
-     *  - Any object with a `process()` method (auto-adapted to legacy interface)
-     *
-     * @param int $priority  Higher = runs earlier (default 0)
+     * @param int $priority Higher = runs earlier. Default 0.
      */
-    public function pipe(object $middleware, int $priority = 0): self
+    public function pipe(MiddlewareInterface $middleware, int $priority = 0): self
     {
-        $adapted = $this->adapt($middleware);
+        if ($this->locked) {
+            throw new \LogicException('Cannot add middleware to a locked pipeline.');
+        }
 
         $this->stack[] = [
-            'middleware' => $adapted,
-            'priority'   => $priority,
-            'index'      => $this->insertionIndex++,
+            'mw'       => $middleware,
+            'priority' => $priority,
+            'index'    => $this->insertionIndex++,
         ];
-
-        $this->sorted = false;
 
         return $this;
     }
 
     /**
-     * Process the request through the middleware pipeline.
-     *
-     * @param ServerRequestInterface $request
-     * @param callable               $finalHandler  The route handler (callable style)
-     * @return ResponseInterface
+     * Lock and sort the pipeline — call once at boot time.
      */
-    public function process(ServerRequestInterface $request, callable $finalHandler): ResponseInterface
+    public function lock(): self
     {
         $this->sort();
+        $this->locked = true;
+        return $this;
+    }
 
-        $handler = new CallableHandlerAdapter($finalHandler);
-
-        // Build the handler chain from inside out
-        foreach (array_reverse($this->stack) as $entry) {
-            $mw = $entry['middleware'];
-
-            if ($mw instanceof Psr15MiddlewareInterface) {
-                // New PSR-15 middleware — pass RequestHandlerInterface
-                $handler = new class($mw, $handler) implements RequestHandlerInterface {
-                    public function __construct(
-                        private readonly Psr15MiddlewareInterface $middleware,
-                        private readonly RequestHandlerInterface $next,
-                    ) {}
-
-                    public function handle(ServerRequestInterface $request): ResponseInterface
-                    {
-                        return $this->middleware->process($request, $this->next);
-                    }
-                };
-            } else {
-                // Legacy MiddlewareInterface — pass callable $next
-                $handler = new class($mw, $handler) implements RequestHandlerInterface {
-                    public function __construct(
-                        private readonly MiddlewareInterface $middleware,
-                        private readonly RequestHandlerInterface $next,
-                    ) {}
-
-                    public function handle(ServerRequestInterface $request): ResponseInterface
-                    {
-                        return $this->middleware->process(
-                            $request,
-                            fn(ServerRequestInterface $req) => $this->next->handle($req)
-                        );
-                    }
-                };
-            }
+    /**
+     * Process the request through the pipeline.
+     */
+    public function process(
+        ServerRequestInterface $request,
+        RequestHandlerInterface $finalHandler,
+    ): ResponseInterface {
+        if (!$this->locked) {
+            $this->sort();
         }
 
+        if (count($this->stack) === 0) {
+            return $finalHandler->handle($request);
+        }
+
+        $handler = new CursorHandler($this->stack, $finalHandler);
         return $handler->handle($request);
     }
 
     /**
-     * Create a new pipeline from an array of middleware.
+     * Create from an array of middleware.
+     *
+     * @param list<MiddlewareInterface> $middleware
      */
     public static function from(array $middleware): self
     {
@@ -122,49 +99,12 @@ class MiddlewarePipeline
     }
 
     /**
-     * Adapt objects into one of the accepted interfaces.
-     */
-    private function adapt(object $middleware): Psr15MiddlewareInterface|MiddlewareInterface
-    {
-        // Already implements PSR-15 interface
-        if ($middleware instanceof Psr15MiddlewareInterface) {
-            return $middleware;
-        }
-
-        // Already implements legacy interface
-        if ($middleware instanceof MiddlewareInterface) {
-            return $middleware;
-        }
-
-        // Check for a process() method on plain objects → wrap as legacy
-        if (method_exists($middleware, 'process')) {
-            return new LegacyMiddlewareAdapter($middleware);
-        }
-
-        throw new \InvalidArgumentException(
-            sprintf(
-                'Middleware must implement %s or %s, or have a process() method. Got: %s',
-                Psr15MiddlewareInterface::class,
-                MiddlewareInterface::class,
-                get_class($middleware)
-            )
-        );
-    }
-
-    /**
-     * Sort by priority (higher first). Stable: entries with equal priority
-     * preserve their insertion order via the index tie-breaker.
+     * Sort stack by priority (descending), then insertion order (ascending).
      */
     private function sort(): void
     {
-        if ($this->sorted) {
-            return;
-        }
-
-        usort($this->stack, static function (array $a, array $b): int {
-            return $b['priority'] <=> $a['priority']
-                ?: $a['index'] <=> $b['index'];
-        });
-        $this->sorted = true;
+        usort($this->stack, static fn(array $a, array $b): int =>
+            $b['priority'] <=> $a['priority'] ?: $a['index'] <=> $b['index']
+        );
     }
 }

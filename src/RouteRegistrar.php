@@ -4,26 +4,22 @@ declare(strict_types=1);
 namespace MonkeysLegion\Router;
 
 /**
- * Fluent route registrar that provides convenience methods
- * for registering CRUD resource routes.
+ * MonkeysLegion Framework — Router Package
  *
- * Registration is **deferred** — routes are only added when `register()`
- * is called explicitly, or when the registrar is destructed.  This allows
- * fluent chaining of `only()` / `except()` before registration occurs.
+ * Fluent CRUD resource route registrar.
+ *
+ * Registration is deferred — routes are added when `register()` is called
+ * or when the instance is destructed.
  *
  * Usage:
- *   $router->resource('/photos', new PhotoController());           // Full CRUD
- *   $router->apiResource('/photos', new PhotoController());        // API CRUD (no create/edit forms)
- *   $router->resource('/photos', $ctrl)->only(['index', 'show']);   // Subset
- *   $router->resource('/photos', $ctrl)->except(['destroy']);       // Inverted subset
+ *   $router->resource('/photos', PhotoController::class);
+ *   $router->apiResource('/photos', PhotoController::class)->only(['index', 'show']);
+ *
+ * @copyright 2026 MonkeysCloud Team
+ * @license   MIT
  */
-class RouteRegistrar
+final class RouteRegistrar
 {
-    /**
-     * Standard resource action → HTTP method + path suffix mapping.
-     *
-     * @var array<string, array{method: string, suffix: string}>
-     */
     private const RESOURCE_MAP = [
         'index'   => ['method' => 'GET',    'suffix' => ''],
         'create'  => ['method' => 'GET',    'suffix' => '/create'],
@@ -36,39 +32,37 @@ class RouteRegistrar
 
     private const API_ACTIONS = ['index', 'store', 'show', 'update', 'destroy'];
 
-    /** @var string[] Allowed action names */
+    /** @var list<string> Allowed action names. */
     private array $actions;
 
-    private Router $router;
-    private string $prefix;
-    private object $controller;
-    private string $resourceName;
+    /** @var list<string> Middleware for resource routes. */
+    private array $middleware = [];
+
+    private readonly string $prefix;
+    private readonly string $resourceName;
     private bool $registered = false;
 
     /**
-     * @param Router       $router
-     * @param string       $prefix      e.g. '/photos'
-     * @param object       $controller  Controller instance or class-string
-     * @param string[]     $actions     Which CRUD actions to register
+     * @param Router            $router
+     * @param string            $prefix     e.g. '/photos'
+     * @param object|class-string $controller Controller instance or class name.
+     * @param list<string>      $actions    CRUD actions to register.
      */
     public function __construct(
-        Router $router,
+        private readonly Router $router,
         string $prefix,
-        object $controller,
-        array $actions = ['index', 'create', 'store', 'show', 'edit', 'update', 'destroy']
+        private readonly object|string $controller,
+        array $actions = ['index', 'create', 'store', 'show', 'edit', 'update', 'destroy'],
     ) {
-        $this->router     = $router;
-        $this->prefix     = '/' . trim($prefix, '/');
-        $this->controller = $controller;
-        $this->actions    = $actions;
+        $this->prefix = '/' . trim($prefix, '/');
+        $this->actions = $actions;
 
-        // Derive resource name from prefix:  /admin/photos → photos
         $parts = explode('/', trim($this->prefix, '/'));
         $this->resourceName = end($parts);
     }
 
     /**
-     * Auto-register when the registrar goes out of scope (if not already).
+     * Auto-register on destruct if not already done.
      */
     public function __destruct()
     {
@@ -77,29 +71,29 @@ class RouteRegistrar
         }
     }
 
-    /**
-     * Register only the specified actions.
-     */
     public function only(array $actions): self
     {
-        $this->actions = array_intersect($this->actions, $actions);
+        $this->actions = array_values(array_intersect($this->actions, $actions));
         return $this;
     }
 
-    /**
-     * Register all actions except the specified ones.
-     */
     public function except(array $actions): self
     {
-        $this->actions = array_diff($this->actions, $actions);
+        $this->actions = array_values(array_diff($this->actions, $actions));
         return $this;
     }
 
     /**
-     * Register the configured resource routes.
-     *
-     * May be called explicitly; is also called by __destruct() if not
-     * already registered.
+     * @param string|list<string> $middleware
+     */
+    public function middleware(string|array $middleware): self
+    {
+        $this->middleware = [...$this->middleware, ...(array) $middleware];
+        return $this;
+    }
+
+    /**
+     * Register configured resource routes.
      */
     public function register(): void
     {
@@ -113,17 +107,22 @@ class RouteRegistrar
                 continue;
             }
 
-            $spec   = self::RESOURCE_MAP[$action];
-            $path   = $this->prefix . $spec['suffix'];
-            $name   = $this->resourceName . '.' . $action;
+            $spec = self::RESOURCE_MAP[$action];
+            $path = $this->prefix . $spec['suffix'];
+            $name = $this->resourceName . '.' . $action;
 
-            // Try to bind to controller method matching the action name
-            if (method_exists($this->controller, $action)) {
-                $handler = [$this->controller, $action];
+            // Resolve handler
+            $controller = is_string($this->controller)
+                ? $this->controller
+                : $this->controller;
+
+            if (is_object($controller) && method_exists($controller, $action)) {
+                $handler = [$controller, $action];
+            } elseif (is_string($controller)) {
+                $handler = [$controller, $action];
             } else {
-                // Fallback: a no-op handler (user should override)
                 $handler = fn() => throw new \BadMethodCallException(
-                    "Controller method '{$action}' not found on " . get_class($this->controller)
+                    "Controller method '{$action}' not found on " . (is_object($controller) ? $controller::class : $controller),
                 );
             }
 
@@ -131,15 +130,16 @@ class RouteRegistrar
                 $spec['method'],
                 $path,
                 $handler,
-                $name
+                $name,
+                $this->middleware,
             );
         }
     }
 
     /**
-     * Create a RouteRegistrar for API-only actions (no create/edit).
+     * Create a registrar for API-only actions (no create/edit).
      */
-    public static function api(Router $router, string $prefix, object $controller): self
+    public static function api(Router $router, string $prefix, object|string $controller): self
     {
         return new self($router, $prefix, $controller, self::API_ACTIONS);
     }

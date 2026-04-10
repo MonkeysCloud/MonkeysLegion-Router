@@ -4,28 +4,24 @@ declare(strict_types=1);
 namespace MonkeysLegion\Router;
 
 /**
- * Route debugger that outputs a formatted list of all registered routes.
+ * MonkeysLegion Framework — Router Package
  *
- * Useful for development and debugging. Outputs an artisan-style table:
+ * Route debugger — outputs formatted route tables, supports filtering
+ * and Symfony-style `match()` testing.
  *
- *   +--------+-------------------+----------------------+------------+
- *   | Method | URI               | Name                 | Middleware |
- *   +--------+-------------------+----------------------+------------+
- *   | GET    | /                 | home                 |            |
- *   | GET    | /users/{id}       | users.show           | auth       |
- *   | POST   | /api/users        | api.users.store      | auth, cors |
- *   +--------+-------------------+----------------------+------------+
+ * @copyright 2026 MonkeysCloud Team
+ * @license   MIT
  */
-class RouteDebugger
+final class RouteDebugger
 {
     public function __construct(
-        private Router $router
+        private readonly Router $router,
     ) {}
 
     /**
-     * Return all routes as an array of descriptive maps.
+     * List all routes as descriptive arrays.
      *
-     * @return array<int, array{method: string, uri: string, name: string, middleware: string, domain: string}>
+     * @return list<array{method: string, uri: string, name: string, middleware: string, domain: string}>
      */
     public function list(): array
     {
@@ -33,18 +29,17 @@ class RouteDebugger
 
         foreach ($this->router->getRoutes()->all() as $route) {
             $routes[] = [
-                'method'     => strtoupper($route['method']),
-                'uri'        => $route['path'],
-                'name'       => $route['name'] ?? '',
-                'middleware'  => implode(', ', $route['middleware'] ?? []),
-                'domain'     => $route['domain'] ?? '',
+                'method'     => $route->method,
+                'uri'        => $route->path,
+                'name'       => $route->name,
+                'middleware' => implode(', ', $route->middleware),
+                'domain'     => $route->domain,
             ];
         }
 
-        // Sort by path then by method
-        usort($routes, function (array $a, array $b): int {
-            return $a['uri'] <=> $b['uri'] ?: $a['method'] <=> $b['method'];
-        });
+        usort($routes, static fn(array $a, array $b): int =>
+            $a['uri'] <=> $b['uri'] ?: $a['method'] <=> $b['method']
+        );
 
         return $routes;
     }
@@ -56,11 +51,10 @@ class RouteDebugger
     {
         $routes = $this->list();
 
-        if (empty($routes)) {
+        if ($routes === []) {
             return "No routes registered.\n";
         }
 
-        // Calculate column widths
         $headers = ['Method', 'URI', 'Name', 'Middleware', 'Domain'];
         $widths  = array_map('strlen', $headers);
 
@@ -98,25 +92,57 @@ class RouteDebugger
     }
 
     /**
+     * Test a specific method + path against routes (like Symfony's router:match).
+     *
+     * @return array{matched: bool, route?: array<string, mixed>, params?: array<string, string>}
+     */
+    public function match(string $method, string $path): array
+    {
+        $compiled = $this->router->getCompiledRoutes();
+        $result   = $compiled->match(strtoupper($method), $path);
+
+        if ($result === null) {
+            $allowed = $compiled->getAllowedMethods($path);
+            return [
+                'matched'         => false,
+                'allowed_methods' => $allowed,
+            ];
+        }
+
+        return [
+            'matched'    => true,
+            'route'      => [
+                'method'     => $result->route->method,
+                'path'       => $result->route->path,
+                'name'       => $result->name(),
+                'middleware' => $result->middleware(),
+                'handler'    => $result->route->handlerPair(),
+            ],
+            'params' => $result->parameters,
+        ];
+    }
+
+    /**
      * Filter routes by method, path, or name.
      *
-     * @return array<int, array{method: string, uri: string, name: string, middleware: string, domain: string}>
+     * @return list<array{method: string, uri: string, name: string, middleware: string, domain: string}>
      */
     public function filter(?string $method = null, ?string $pathContains = null, ?string $name = null): array
     {
-        $routes = $this->list();
-
-        return array_values(array_filter($routes, function (array $route) use ($method, $pathContains, $name): bool {
-            if ($method !== null && strtoupper($route['method']) !== strtoupper($method)) {
-                return false;
-            }
-            if ($pathContains !== null && !str_contains($route['uri'], $pathContains)) {
-                return false;
-            }
-            if ($name !== null && !str_contains($route['name'], $name)) {
-                return false;
-            }
-            return true;
-        }));
+        return array_values(array_filter(
+            $this->list(),
+            static function (array $route) use ($method, $pathContains, $name): bool {
+                if ($method !== null && strtoupper($route['method']) !== strtoupper($method)) {
+                    return false;
+                }
+                if ($pathContains !== null && !str_contains($route['uri'], $pathContains)) {
+                    return false;
+                }
+                if ($name !== null && !str_contains($route['name'], $name)) {
+                    return false;
+                }
+                return true;
+            },
+        ));
     }
 }

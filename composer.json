@@ -1,12 +1,13 @@
 {
   "name": "monkeyscloud/monkeyslegion-router",
-  "description": "Comprehensive attribute- and DSL-based HTTP router for MonkeysLegion with middleware, named routes, constraints, and caching",
+  "description": "High-performance attribute-driven HTTP router for MonkeysLegion with compiled trie matching, PSR-15 middleware, and route model binding.",
   "type": "library",
   "license": "MIT",
   "keywords": [
     "router",
     "http",
     "psr-7",
+    "psr-15",
     "middleware",
     "routing",
     "attributes",
@@ -22,20 +23,19 @@
   "prefer-stable": true,
   "require": {
     "php": "^8.4",
-    "monkeyscloud/monkeyslegion-http": "^1.0",
+    "monkeyscloud/monkeyslegion-http": "^2.0",
     "psr/http-message": "^2.0",
-    "psr/log": "^3.0"
+    "psr/http-server-handler": "^1.0",
+    "psr/http-server-middleware": "^1.0"
   },
   "require-dev": {
     "phpunit/phpunit": "^11.0",
-    "phpstan/phpstan": "^2.0"
+    "psr/container": "^2.0",
+    "psr/log": "^3.0"
   },
   "autoload": {
     "psr-4": {
-      "MonkeysLegion\\Router\\": "src/",
-      "MonkeysLegion\\Router\\Attributes\\": "src/Attributes/",
-      "MonkeysLegion\\Router\\Middleware\\": "src/Middleware/",
-      "MonkeysLegion\\Router\\Constraints\\": "src/Constraints/"
+      "MonkeysLegion\\Router\\": "src/"
     }
   },
   "autoload-dev": {
@@ -44,16 +44,12 @@
     }
   },
   "scripts": {
-    "test": "phpunit",
-    "analyse": "phpstan analyse src --level=8",
-    "check": [
-      "@analyse",
-      "@test"
-    ]
+    "test": "phpunit"
   },
   "extra": {
     "branch-alias": {
-      "dev-main": "2.0.x-dev"
+      "dev-main": "2.0.x-dev",
+      "dev-2.x-dev": "2.0.x-dev"
     }
   },
   "config": {

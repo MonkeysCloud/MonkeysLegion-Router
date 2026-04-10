@@ -6,19 +6,31 @@ namespace MonkeysLegion\Router\Attributes;
 use Attribute;
 
 /**
- * Route prefix attribute for applying a common path prefix to all routes in a controller.
+ * MonkeysLegion Framework — Router Package
+ *
+ * Route prefix attribute for applying a common path prefix to all
+ * routes in a controller.
  *
  * Usage:
  *   #[RoutePrefix('/api/v1/users')]
  *   class UserController { ... }
+ *
+ * @copyright 2026 MonkeysCloud Team
+ * @license   MIT
  */
 #[Attribute(Attribute::TARGET_CLASS)]
 final class RoutePrefix
 {
+    public readonly string $prefix;
+
+    /**
+     * @param string       $prefix     Path prefix.
+     * @param list<string> $middleware Controller-level middleware.
+     */
     public function __construct(
-        public string $prefix,
-        public array  $middleware = [],
+        string                $prefix,
+        public readonly array $middleware = [],
     ) {
-        $this->prefix = '/' . trim($this->prefix, '/');
+        $this->prefix = '/' . trim($prefix, '/');
     }
 }
