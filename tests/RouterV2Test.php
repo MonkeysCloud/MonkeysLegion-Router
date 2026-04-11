@@ -317,8 +317,8 @@ class RouterV2Test extends TestCase
     public function testCompiledExportImport(): void
     {
         $rc = new RouteCollection();
-        $rc->add('GET', '/static', fn() => null, 'test');
-        $rc->add('GET', '/dynamic/{id}', fn() => null);
+        $rc->add('GET', '/static', ['StaticController', 'index'], 'test');
+        $rc->add('GET', '/dynamic/{id}', ['DynamicController', 'show']);
 
         $compiled = (new RouteCompiler())->compile($rc);
         $exported = $compiled->export();
@@ -326,6 +326,18 @@ class RouterV2Test extends TestCase
         $imported = CompiledRoutes::import($exported);
         $this->assertNotNull($imported->match('GET', '/static'));
         $this->assertNotNull($imported->match('GET', '/dynamic/42'));
+    }
+
+    public function testCompiledExportClosureThrows(): void
+    {
+        $rc = new RouteCollection();
+        $rc->add('GET', '/closure', fn() => null);
+
+        $compiled = (new RouteCompiler())->compile($rc);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('cache-exportable');
+        $compiled->export();
     }
 
     // ── MiddlewarePipeline ────────────────────────────────────

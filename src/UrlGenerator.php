@@ -22,16 +22,18 @@ final class UrlGenerator
      */
     private array $namedRoutes = [];
 
+    private string $_baseUrl;
+
     public string $baseUrl {
-        get => $this->baseUrl;
+        get => $this->_baseUrl;
         set(string $value) {
-            $this->baseUrl = rtrim($value, '/');
+            $this->_baseUrl = rtrim($value, '/');
         }
     }
 
     public function __construct()
     {
-        $this->baseUrl = '';
+        $this->_baseUrl = '';
     }
 
     /**

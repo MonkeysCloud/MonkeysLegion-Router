@@ -274,7 +274,7 @@ final class RouteCollection
 
         // Extract inline constraints: {id:\d+}, {path+}, {slug?}
         $path = preg_replace_callback(
-            '/\{([^}:?+]+)([+])?:?([^}?]*)(\\?)?}/',
+            '/\{([^}:?+]+)([+])?:?([^}?]*)(\?)?}/',
             function (array $m) use (&$constraints, &$greedyParams): string {
                 $name     = $m[1];
                 $greedy   = !empty($m[2]);

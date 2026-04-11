@@ -56,7 +56,7 @@ final class RouteRateLimiter implements MiddlewareInterface
         $bucket = $this->getBucket($key, $per);
 
         if ($bucket['count'] >= $max) {
-            $retryAfter = $bucket['reset'] - time();
+            $retryAfter = max(1, $bucket['reset'] - time());
             return new Response(
                 Stream::createFromString(json_encode([
                     'error'   => 'Too Many Requests',
@@ -65,7 +65,7 @@ final class RouteRateLimiter implements MiddlewareInterface
                 429,
                 [
                     'Content-Type'            => 'application/json',
-                    'Retry-After'             => (string) max(1, $retryAfter),
+                    'Retry-After'             => (string) $retryAfter,
                     'X-RateLimit-Limit'       => (string) $max,
                     'X-RateLimit-Remaining'   => '0',
                     'X-RateLimit-Reset'       => (string) $bucket['reset'],

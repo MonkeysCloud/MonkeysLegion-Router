@@ -66,9 +66,11 @@ final class Router
     private ?ContainerInterface $container = null;
     private ?LoggerInterface $logger = null;
 
+    private TrailingSlashStrategy $_trailingSlashStrategy;
+
     public TrailingSlashStrategy $trailingSlashStrategy {
-        get => $this->trailingSlashStrategy;
-        set => $this->trailingSlashStrategy = $value;
+        get => $this->_trailingSlashStrategy;
+        set => $this->_trailingSlashStrategy = $value;
     }
 
     public function __construct(
@@ -76,7 +78,7 @@ final class Router
     ) {
         $this->urlGenerator           = new UrlGenerator();
         $this->groupContext           = new GroupContext();
-        $this->trailingSlashStrategy  = TrailingSlashStrategy::STRIP;
+        $this->_trailingSlashStrategy  = TrailingSlashStrategy::STRIP;
     }
 
     // ── Configuration ──────────────────────────────────────────
@@ -366,14 +368,20 @@ final class Router
         $methodsToTry = $isHead ? ['HEAD', 'GET'] : [$method];
 
         foreach ($methodsToTry as $tryMethod) {
-            $result = $this->compiled->match($tryMethod, $path);
+            // matchAll returns all candidates so domain filtering
+            // doesn't block a later route with the same path shape.
+            $candidates = $this->compiled->matchAll($tryMethod, $path);
 
-            if ($result === null) {
-                continue;
+            $result = null;
+            foreach ($candidates as $candidate) {
+                if ($candidate->route->domain !== '' && !$this->matchesDomain($candidate->route->domain, $host)) {
+                    continue;
+                }
+                $result = $candidate;
+                break;
             }
 
-            // Domain constraint
-            if ($result->route->domain !== '' && !$this->matchesDomain($result->route->domain, $host)) {
+            if ($result === null) {
                 continue;
             }
 
@@ -424,6 +432,14 @@ final class Router
                     }
                 }
 
+                // Instantiate class-string handlers: [ClassName, method]
+                if (is_array($handler) && count($handler) === 2 && is_string($handler[0]) && class_exists($handler[0])) {
+                    $instance   = ($this->container !== null && $this->container->has($handler[0]))
+                        ? $this->container->get($handler[0])
+                        : new $handler[0]();
+                    $handler = [$instance, $handler[1]];
+                }
+
                 return call_user_func_array($handler, [$req, ...$params]);
             });
 
@@ -437,8 +453,8 @@ final class Router
             return $response;
         }
 
-        // OPTIONS auto-response
-        $allowedMethods = $this->compiled->getAllowedMethods($path);
+        // OPTIONS auto-response (domain-aware)
+        $allowedMethods = $this->compiled->getAllowedMethods($path, $host, $this->matchesDomain(...));
         if ($method === 'OPTIONS' && $allowedMethods !== []) {
             $allowedMethods[] = 'OPTIONS';
             if (in_array('GET', $allowedMethods, true) && !in_array('HEAD', $allowedMethods, true)) {
@@ -657,6 +673,9 @@ final class Router
             if ($instance instanceof MiddlewareInterface) {
                 return $instance;
             }
+            throw new \InvalidArgumentException(
+                "Container entry [{$class}] does not implement MiddlewareInterface.",
+            );
         }
 
         if ($params !== []) {

@@ -35,7 +35,19 @@ final class RouteCompiler
         foreach ($methodBuckets as $method => $bucket) {
             foreach ($bucket as $route) {
                 if ($this->isStatic($route->path)) {
-                    $staticMap[$method][$route->path] = $route;
+                    // If a domain-constrained route shares a path with another,
+                    // move both to dynamicMap so the dispatcher can evaluate
+                    // domain constraints rather than overwriting.
+                    if ($route->domain !== '' || isset($staticMap[$method][$route->path])) {
+                        // Existing static entry → demote to dynamic
+                        if (isset($staticMap[$method][$route->path])) {
+                            $dynamicMap[$method][] = $staticMap[$method][$route->path];
+                            unset($staticMap[$method][$route->path]);
+                        }
+                        $dynamicMap[$method][] = $route;
+                    } else {
+                        $staticMap[$method][$route->path] = $route;
+                    }
                 } else {
                     $dynamicMap[$method][] = $route;
                 }

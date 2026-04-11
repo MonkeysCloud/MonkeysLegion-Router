@@ -109,11 +109,11 @@ final class RouteGroup
     {
         $fullPath = $this->context->applyPath($path);
 
-        $this->router->add(
+        $this->router->addRaw(
             $method,
             $fullPath,
             $handler,
-            $name,
+            $name ?? '',
             $this->context->middleware,
             $this->context->constraints,
         );
