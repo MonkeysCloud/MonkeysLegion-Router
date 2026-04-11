@@ -5,168 +5,140 @@ namespace MonkeysLegion\Router;
 
 use MonkeysLegion\Http\Message\Response;
 use MonkeysLegion\Http\Message\Stream;
-use MonkeysLegion\Router\Attributes\Route as RouteAttribute;
-use MonkeysLegion\Router\Attributes\RoutePrefix;
-use MonkeysLegion\Router\Attributes\Middleware as MiddlewareAttribute;
-use MonkeysLegion\Router\Middleware\MiddlewareInterface;
-use MonkeysLegion\Router\Middleware\Psr15MiddlewareInterface;
+use MonkeysLegion\Router\Middleware\CallableHandlerAdapter;
 use MonkeysLegion\Router\Middleware\MiddlewarePipeline;
-use MonkeysLegion\Router\Middleware\LegacyMiddlewareAdapter;
-use MonkeysLegion\Router\TrailingSlashStrategy;
-use Psr\Http\Message\ServerRequestInterface;
-use Psr\Http\Message\ResponseInterface;
+
 use Psr\Container\ContainerInterface;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Server\MiddlewareInterface;
+use Psr\Http\Server\RequestHandlerInterface;
 use Psr\Log\LoggerInterface;
+
 use InvalidArgumentException;
 
 /**
- * Enhanced HTTP router for MonkeysLegion with middleware, named routes, and route groups.
+ * MonkeysLegion Framework — Router Package
  *
- * v2.2 additions:
- *  - Optional DI container for lazy middleware resolution
- *  - Parameterized middleware parsing (`'throttle:60,1'`)
- *  - Priority-aware middleware pipeline (PSR-15 aligned)
- *  - HEAD auto-delegation to GET handlers
- *  - OPTIONS auto-response with allowed methods
- *  - Domain/host constraint enforcement
- *  - Configurable trailing-slash strategy
+ * High-performance HTTP router with compiled trie matching, PSR-15
+ * middleware pipeline, and attribute-driven configuration.
+ *
+ * v2 architecture:
+ *  • Compiled route matching via static hash + regex scan.
+ *  • Method-indexed O(1) filtering.
+ *  • Cursor-based middleware pipeline (zero anonymous classes).
+ *  • Immutable group context via GroupContext value objects.
+ *  • Route model binding via DI container.
+ *  • HEAD auto-delegation, OPTIONS auto-response, domain constraints.
+ *
+ * @copyright 2026 MonkeysCloud Team
+ * @license   MIT
  */
-class Router
+final class Router
 {
-    private UrlGenerator $urlGenerator;
+    private readonly UrlGenerator $urlGenerator;
+    private CompiledRoutes $compiled;
+    private bool $isCompiled = false;
 
-    /**
-     * @var array<string, MiddlewareInterface|object> Registered middleware
-     */
+    /** @var array<string, MiddlewareInterface> Named middleware registry. */
     private array $middleware = [];
 
-    /**
-     * @var array<string, array{priority: int}> Middleware priority map
-     */
+    /** @var array<string, int> Middleware priority map. */
     private array $middlewarePriority = [];
 
-    /**
-     * @var array<string, array<string>> Middleware groups
-     */
+    /** @var array<string, list<string>> Middleware groups. */
     private array $middlewareGroups = [];
 
-    /**
-     * @var array<string> Global middleware applied to all routes
-     */
+    /** @var list<string> Global middleware. */
     private array $globalMiddleware = [];
 
-    // Current group context
-    private string $currentPrefix = '';
-    private array $currentMiddleware = [];
-    private array $currentWhere = [];
-    private string $currentDomain = '';
+    private GroupContext $groupContext;
 
-    // Error handlers
-    /** @var null|callable */
+    /** @var callable|null */
     private $notFoundHandler = null;
 
-    /** @var null|callable */
+    /** @var callable|null */
     private $methodNotAllowedHandler = null;
 
-    /** @var ContainerInterface|null DI container for lazy middleware resolution */
-    private ?ContainerInterface $container = null;
-
-    /** @var TrailingSlashStrategy Trailing-slash handling strategy */
-    private TrailingSlashStrategy $trailingSlashStrategy = TrailingSlashStrategy::STRIP;
-
-    /** @var callable|null Fallback handler (catch-all) */
+    /** @var callable|null */
     private $fallbackHandler = null;
 
-    /** @var LoggerInterface|null PSR-3 logger for routing events (404/405) */
+    private ?ContainerInterface $container = null;
     private ?LoggerInterface $logger = null;
 
-    public function __construct(
-        private RouteCollection $routes
-    ) {
-        $this->urlGenerator = new UrlGenerator();
+    private TrailingSlashStrategy $_trailingSlashStrategy;
+
+    public TrailingSlashStrategy $trailingSlashStrategy {
+        get => $this->_trailingSlashStrategy;
+        set => $this->_trailingSlashStrategy = $value;
     }
 
-    // ─── Container ──────────────────────────────────────────────────────
+    public function __construct(
+        private readonly RouteCollection $routes,
+    ) {
+        $this->urlGenerator           = new UrlGenerator();
+        $this->groupContext           = new GroupContext();
+        $this->_trailingSlashStrategy  = TrailingSlashStrategy::STRIP;
+    }
 
-    /**
-     * Set a PSR-11 container for lazy middleware resolution.
-     */
+    // ── Configuration ──────────────────────────────────────────
+
     public function setContainer(ContainerInterface $container): void
     {
         $this->container = $container;
     }
 
-    /**
-     * Set the trailing-slash strategy.
-     */
-    public function setTrailingSlashStrategy(TrailingSlashStrategy $strategy): void
-    {
-        $this->trailingSlashStrategy = $strategy;
-    }
-
-    /**
-     * Set a PSR-3 logger for routing events (404, 405, etc.).
-     *
-     * When set, the router will automatically log:
-     *  - `notice` for 404 Not Found
-     *  - `warning` for 405 Method Not Allowed
-     */
     public function setLogger(LoggerInterface $logger): void
     {
         $this->logger = $logger;
     }
 
-    /**
-     * Get the trailing-slash strategy.
-     */
-    public function getTrailingSlashStrategy(): TrailingSlashStrategy
-    {
-        return $this->trailingSlashStrategy;
-    }
-
-    /**
-     * Register a fallback handler (catch-all for unmatched routes).
-     */
     public function fallback(callable $handler): void
     {
         $this->fallbackHandler = $handler;
     }
 
-    /**
-     * Register a convenience redirect route.
-     */
-    public function redirect(string $from, string $to, int $status = 302): void
+    public function setNotFoundHandler(callable $handler): void
     {
-        $this->get($from, function () use ($to, $status) {
-            return new Response(
-                Stream::createFromString(''),
-                $status,
-                ['Location' => $to]
-            );
-        });
+        $this->notFoundHandler = $handler;
     }
 
-    // ─── Route registration ─────────────────────────────────────────────
+    public function setMethodNotAllowedHandler(callable $handler): void
+    {
+        $this->methodNotAllowedHandler = $handler;
+    }
+
+    // ── Route registration ─────────────────────────────────────
 
     /**
-     * Add a new route definition
+     * Add a route definition.
+     *
+     * @param string                       $method
+     * @param string                       $path
+     * @param array|callable|\Closure      $handler
+     * @param string|null                  $name
+     * @param list<string>                 $middleware
+     * @param array<string, string>        $constraints
+     * @param array<string, mixed>         $defaults
+     * @param string                       $domain
+     * @param array<string, mixed>         $meta
      */
     public function add(
-        string $method,
-        string $path,
-        callable $handler,
-        ?string $name = null,
-        array $middleware = [],
-        array $constraints = [],
-        array $defaults = [],
-        string $domain = '',
-        array $meta = []
+        string               $method,
+        string               $path,
+        array|callable|\Closure $handler,
+        ?string              $name        = null,
+        array                $middleware  = [],
+        array                $constraints = [],
+        array                $defaults    = [],
+        string               $domain      = '',
+        array                $meta        = [],
     ): void {
         // Apply current group context
-        $path = $this->currentPrefix . '/' . ltrim($path, '/');
-        $middleware = array_merge($this->currentMiddleware, $middleware);
-        $constraints = array_merge($this->currentWhere, $constraints);
-        $domain = $domain ?: $this->currentDomain;
+        $path       = $this->groupContext->applyPath($path);
+        $middleware  = [...$this->groupContext->middleware, ...$middleware];
+        $constraints = [...$this->groupContext->constraints, ...$constraints];
+        $domain     = $domain ?: $this->groupContext->domain;
 
         $this->routes->add(
             $method,
@@ -177,217 +149,144 @@ class Router
             $constraints,
             $defaults,
             $domain,
-            $meta
+            $meta,
         );
 
-        // Register with URL generator if named
-        if ($name) {
-            $paramNames = $this->extractParamNames($path);
-            $this->urlGenerator->register($name, $path, [$method], $paramNames);
+        // Register with URL generator
+        if ($name !== null && $name !== '') {
+            $this->urlGenerator->register(
+                $name,
+                $path,
+                [$method],
+                $this->extractParamNames($path),
+            );
         }
+
+        $this->isCompiled = false;
     }
 
     /**
-     * Add a GET route
+     * Add a route without applying group context (used by ControllerScanner).
+     *
+     * @internal
      */
-    public function get(string $path, callable $handler, ?string $name = null): void
+    public function addRaw(
+        string               $method,
+        string               $path,
+        array|callable|\Closure $handler,
+        string               $name        = '',
+        array                $middleware  = [],
+        array                $constraints = [],
+        array                $defaults    = [],
+        string               $domain      = '',
+        array                $meta        = [],
+    ): void {
+        $this->routes->add(
+            $method,
+            $path,
+            $handler,
+            $name,
+            $middleware,
+            $constraints,
+            $defaults,
+            $domain,
+            $meta,
+        );
+
+        if ($name !== '') {
+            $this->urlGenerator->register(
+                $name,
+                $path,
+                [$method],
+                $this->extractParamNames($path),
+            );
+        }
+
+        $this->isCompiled = false;
+    }
+
+    // ── Shorthand methods ──────────────────────────────────────
+
+    public function get(string $path, array|callable|\Closure $handler, ?string $name = null): void
     {
         $this->add('GET', $path, $handler, $name);
     }
 
-    /**
-     * Add a POST route
-     */
-    public function post(string $path, callable $handler, ?string $name = null): void
+    public function post(string $path, array|callable|\Closure $handler, ?string $name = null): void
     {
         $this->add('POST', $path, $handler, $name);
     }
 
-    /**
-     * Add a PUT route
-     */
-    public function put(string $path, callable $handler, ?string $name = null): void
+    public function put(string $path, array|callable|\Closure $handler, ?string $name = null): void
     {
         $this->add('PUT', $path, $handler, $name);
     }
 
-    /**
-     * Add a DELETE route
-     */
-    public function delete(string $path, callable $handler, ?string $name = null): void
+    public function delete(string $path, array|callable|\Closure $handler, ?string $name = null): void
     {
         $this->add('DELETE', $path, $handler, $name);
     }
 
-    /**
-     * Add a PATCH route
-     */
-    public function patch(string $path, callable $handler, ?string $name = null): void
+    public function patch(string $path, array|callable|\Closure $handler, ?string $name = null): void
     {
         $this->add('PATCH', $path, $handler, $name);
     }
 
-    /**
-     * Add an OPTIONS route
-     */
-    public function options(string $path, callable $handler, ?string $name = null): void
+    public function options(string $path, array|callable|\Closure $handler, ?string $name = null): void
     {
         $this->add('OPTIONS', $path, $handler, $name);
     }
 
-    /**
-     * Add a route that responds to any HTTP method
-     */
-    public function any(string $path, callable $handler, ?string $name = null): void
+    public function any(string $path, array|callable|\Closure $handler, ?string $name = null): void
     {
-        foreach (['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'] as $method) {
-            $this->add($method, $path, $handler, $name);
+        foreach (['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'] as $method) {
+            $this->add($method, $path, $handler, $name !== null ? $name . '.' . strtolower($method) : null);
         }
     }
 
     /**
-     * Add a route that responds to multiple HTTP methods
+     * @param list<string> $methods
      */
-    public function match(array $methods, string $path, callable $handler, ?string $name = null): void
+    public function match(array $methods, string $path, array|callable|\Closure $handler, ?string $name = null): void
     {
         foreach ($methods as $method) {
             $this->add($method, $path, $handler, $name);
         }
     }
 
-    /**
-     * Register a full CRUD resource (index, create, store, show, edit, update, destroy).
-     *
-     * @return RouteRegistrar  Fluent registrar — call `->only()` or `->except()` to filter.
-     */
-    public function resource(string $prefix, object $controller): RouteRegistrar
+    public function redirect(string $from, string $to, int $status = 302): void
+    {
+        $this->get($from, fn() => new Response(
+            Stream::createFromString(''),
+            $status,
+            ['Location' => $to],
+        ));
+    }
+
+    public function resource(string $prefix, object|string $controller): RouteRegistrar
     {
         return new RouteRegistrar($this, $prefix, $controller);
     }
 
-    /**
-     * Register API-only CRUD resource (index, store, show, update, destroy — no create/edit).
-     *
-     * @return RouteRegistrar  Fluent registrar — call `->only()` or `->except()` to filter.
-     */
-    public function apiResource(string $prefix, object $controller): RouteRegistrar
+    public function apiResource(string $prefix, object|string $controller): RouteRegistrar
     {
         return RouteRegistrar::api($this, $prefix, $controller);
     }
 
-    /**
-     * Create a route group with shared attributes.
-     *
-     * Usage:
-     *   // Fluent style with extra attributes
-     *   $router->group()
-     *       ->prefix('/api')
-     *       ->middleware('auth')
-     *       ->group(function (Router $r) {
-     *           $r->get('/users', $handler, 'api.users.index');
-     *       });
-     *
-     *   // Simple callback style
-     *   $router->group(function (Router $r) {
-     *       $r->get('/health', $handler, 'health');
-     *   });
-     */
     public function group(?callable $callback = null): RouteGroup
     {
-        $group = new RouteGroup($this);
+        $group = new RouteGroup($this, $this->groupContext);
 
         if ($callback !== null) {
-            // No extra attributes configured on the group itself;
-            // just execute the callback inside the current router context.
             $group->group($callback);
         }
 
         return $group;
     }
 
-    /**
-     * Register a controller with Route attributes
-     */
-    public function registerController(object $controller): void
-    {
-        $ref = new \ReflectionClass($controller);
+    // ── Middleware registration ─────────────────────────────────
 
-        // Get controller-level prefix
-        $controllerPrefix = '';
-        $controllerMiddleware = [];
-
-        foreach ($ref->getAttributes(RoutePrefix::class) as $attr) {
-            /** @var RoutePrefix $prefix */
-            $prefix = $attr->newInstance();
-            $controllerPrefix = $prefix->prefix;
-            $controllerMiddleware = array_merge($controllerMiddleware, $prefix->middleware);
-        }
-
-        // Get controller-level middleware
-        foreach ($ref->getAttributes(MiddlewareAttribute::class) as $attr) {
-            /** @var MiddlewareAttribute $mw */
-            $mw = $attr->newInstance();
-            $controllerMiddleware = array_merge($controllerMiddleware, $mw->middleware);
-        }
-
-        // Register each method with Route attributes
-        foreach ($ref->getMethods() as $method) {
-            $methodMiddleware = $controllerMiddleware;
-
-            // Get method-level middleware
-            foreach ($method->getAttributes(MiddlewareAttribute::class) as $attr) {
-                /** @var MiddlewareAttribute $mw */
-                $mw = $attr->newInstance();
-                $methodMiddleware = array_merge($methodMiddleware, $mw->middleware);
-            }
-
-            // Register each Route attribute
-            foreach ($method->getAttributes(RouteAttribute::class) as $attr) {
-                /** @var RouteAttribute $meta */
-                $meta = $attr->newInstance();
-
-                $fullPath = $controllerPrefix . $meta->path;
-                $fullPath = rtrim($fullPath, '/') ?: '/';
-                $middleware = array_merge($methodMiddleware, $meta->middleware);
-
-                // Register for each HTTP method
-                foreach ($meta->methods as $httpMethod) {
-                    $this->routes->add(
-                        $httpMethod,
-                        $fullPath,
-                        [$controller, $method->getName()],
-                        $meta->name,
-                        $middleware,
-                        $meta->where,
-                        $meta->defaults,
-                        $meta->domain,
-                        [
-                            'summary' => $meta->summary,
-                            'tags' => $meta->tags,
-                            'description' => $meta->description,
-                            'meta' => $meta->meta,
-                        ]
-                    );
-
-                    // Register with URL generator
-                    if ($meta->name) {
-                        $paramNames = $this->extractParamNames($fullPath);
-                        $this->urlGenerator->register($meta->name, $fullPath, [$httpMethod], $paramNames);
-                    }
-                }
-            }
-        }
-    }
-
-    // ─── Middleware registration ─────────────────────────────────────────
-
-    /**
-     * Register middleware by name.
-     *
-     * Accepts both v2.2 PSR-15 MiddlewareInterface and v2.0 legacy
-     * middleware (auto-adapted).
-     */
-    public function registerMiddleware(string $name, object|string $middleware, int $priority = 0): void
+    public function registerMiddleware(string $name, MiddlewareInterface|string $middleware, int $priority = 0): void
     {
         if (is_string($middleware)) {
             if (!class_exists($middleware)) {
@@ -396,311 +295,228 @@ class Router
             $middleware = $this->instantiateMiddleware($middleware);
         }
 
-        // Accept both Psr15MiddlewareInterface and legacy MiddlewareInterface
-        if (!$middleware instanceof Psr15MiddlewareInterface
-            && !$middleware instanceof MiddlewareInterface
-            && is_object($middleware)
-        ) {
-            if (method_exists($middleware, 'process')) {
-                $middleware = new LegacyMiddlewareAdapter($middleware);
-            } else {
-                throw new InvalidArgumentException("Middleware must implement MiddlewareInterface or Psr15MiddlewareInterface, or have a process() method.");
-            }
-        }
-
-        $this->middleware[$name] = $middleware;
-        $this->middlewarePriority[$name] = ['priority' => $priority];
+        $this->middleware[$name]         = $middleware;
+        $this->middlewarePriority[$name] = $priority;
     }
 
     /**
-     * Register a middleware group
+     * @param list<string> $middleware
      */
     public function registerMiddlewareGroup(string $name, array $middleware): void
     {
         $this->middlewareGroups[$name] = $middleware;
     }
 
-    /**
-     * Add global middleware applied to all routes
-     */
     public function addGlobalMiddleware(string $middleware): void
     {
         $this->globalMiddleware[] = $middleware;
     }
 
+    // ── Compilation ────────────────────────────────────────────
+
     /**
-     * Resolve middleware by name, with optional parameterized parsing.
-     *
-     * Supports `'throttle:60,1'` syntax — the name before `:` is the
-     * middleware identifier, the part after is comma-separated parameters
-     * passed to the middleware if it implements a `setParameters()` method
-     * or accepts constructor arguments.
+     * Compile routes for dispatch. Called automatically on first dispatch.
      */
-    private function resolveMiddleware(string $name): Psr15MiddlewareInterface|MiddlewareInterface|null
+    public function compile(): void
     {
-        // Parse parameters: 'throttle:60,1' → name = 'throttle', params = ['60', '1']
-        $params = [];
-        if (str_contains($name, ':')) {
-            [$name, $paramStr] = explode(':', $name, 2);
-            $params = explode(',', $paramStr);
-        }
+        $compiler       = new RouteCompiler();
+        $this->compiled = $compiler->compile($this->routes);
+        $this->isCompiled = true;
+    }
 
-        // Check if it's a registered middleware — clone to avoid mutation
-        if (isset($this->middleware[$name])) {
-            $mw = clone $this->middleware[$name];
-            $this->applyParameters($mw, $params);
-            return $mw;
+    public function getCompiledRoutes(): CompiledRoutes
+    {
+        if (!$this->isCompiled) {
+            $this->compile();
         }
-
-        // Check if it's a middleware group
-        if (isset($this->middlewareGroups[$name])) {
-            return null;
-        }
-
-        // Try resolving from DI container
-        if ($this->container !== null && $this->container->has($name)) {
-            $instance = $this->container->get($name);
-            if ($instance instanceof Psr15MiddlewareInterface || $instance instanceof MiddlewareInterface) {
-                $this->applyParameters($instance, $params);
-                return $instance;
-            }
-            if (is_object($instance) && method_exists($instance, 'process')) {
-                return new LegacyMiddlewareAdapter($instance);
-            }
-        }
-
-        // Try to instantiate as class name
-        if (class_exists($name)) {
-            $instance = $this->instantiateMiddleware($name, $params);
-            if ($instance instanceof Psr15MiddlewareInterface || $instance instanceof MiddlewareInterface) {
-                return $instance;
-            }
-            if (is_object($instance) && method_exists($instance, 'process')) {
-                return new LegacyMiddlewareAdapter($instance);
-            }
-        }
-
-        return null;
+        return $this->compiled;
     }
 
     /**
-     * Expand middleware groups into individual middleware
+     * Load pre-compiled routes (from cache).
      */
-    private function expandMiddleware(array $middlewareList): array
+    public function loadCompiled(CompiledRoutes $compiled): void
     {
-        $expanded = [];
-
-        foreach ($middlewareList as $middleware) {
-            // Strip parameters for group lookup
-            $baseName = str_contains($middleware, ':')
-                ? explode(':', $middleware, 2)[0]
-                : $middleware;
-
-            if (isset($this->middlewareGroups[$baseName])) {
-                $expanded = array_merge($expanded, $this->expandMiddleware($this->middlewareGroups[$baseName]));
-            } else {
-                $expanded[] = $middleware;
-            }
-        }
-
-        return $expanded;
+        $this->compiled   = $compiled;
+        $this->isCompiled = true;
     }
 
-    // ─── Dispatch ───────────────────────────────────────────────────────
+    // ── Dispatch ───────────────────────────────────────────────
 
     /**
      * Dispatch a PSR-7 request to the matching route.
-     *
-     * v2.2 enhancements:
-     *  - Configurable trailing-slash strategy
-     *  - HEAD auto-delegation to GET (body stripped)
-     *  - OPTIONS auto-response with allowed methods
-     *  - Domain constraint enforcement
-     *  - Fallback handler support
      */
     public function dispatch(ServerRequestInterface $request): ResponseInterface
     {
-        $method = strtoupper($request->getMethod());
-        $rawPath = $request->getUri()->getPath();
-
-        // ── Trailing-slash strategy ──────────────────────────────────
-        $path = $this->normalizeTrailingSlash($rawPath, $method);
-        if ($path instanceof ResponseInterface) {
-            return $path; // REDIRECT_301 was triggered
+        if (!$this->isCompiled) {
+            $this->compile();
         }
 
-        $host = $request->getUri()->getHost();
-        $isHead = ($method === 'HEAD');
-        $allowedMethods = [];
+        $method  = strtoupper($request->getMethod());
+        $rawPath = $request->getUri()->getPath();
 
-        // If HEAD, try to match HEAD first, then fall back to GET
+        // Trailing-slash strategy
+        $path = $this->normalizeTrailingSlash($rawPath, $method);
+        if ($path instanceof ResponseInterface) {
+            return $path;
+        }
+
+        $host   = $request->getUri()->getHost();
+        $isHead = ($method === 'HEAD');
+
+        // HEAD → try HEAD first, then fallback to GET
         $methodsToTry = $isHead ? ['HEAD', 'GET'] : [$method];
 
         foreach ($methodsToTry as $tryMethod) {
-            foreach ($this->routes->all() as $route) {
-                $routeMethod = strtoupper($route['method']);
+            // matchAll returns all candidates so domain filtering
+            // doesn't block a later route with the same path shape.
+            $candidates = $this->compiled->matchAll($tryMethod, $path);
 
-                // ── Domain constraint enforcement ───────────────────
-                if (!empty($route['domain']) && !$this->matchesDomain($route['domain'], $host)) {
+            $result = null;
+            foreach ($candidates as $candidate) {
+                if ($candidate->route->domain !== '' && !$this->matchesDomain($candidate->route->domain, $host)) {
                     continue;
                 }
-
-                // Check method match
-                if ($routeMethod !== $tryMethod) {
-                    // Track allowed methods for this path
-                    if (preg_match($route['regex'], $path)) {
-                        $allowedMethods[] = $routeMethod;
-                    }
-                    continue;
-                }
-
-                // Check path match
-                if (!preg_match($route['regex'], $path, $matches)) {
-                    continue;
-                }
-
-                // Attach named parameters to request attributes
-                foreach ($route['paramNames'] as $name) {
-                    $value = $matches[$name] ?? ($route['defaults'][$name] ?? null);
-                    if ($value !== null) {
-                        $request = $request->withAttribute($name, $value);
-                    }
-                }
-
-                // Prepare middleware pipeline
-                $middlewareList = array_merge(
-                    $this->globalMiddleware,
-                    $this->expandMiddleware($route['middleware'])
-                );
-
-                $pipeline = new MiddlewarePipeline();
-
-                foreach ($middlewareList as $mwName) {
-                    $mwInstance = $this->resolveMiddleware($mwName);
-                    if ($mwInstance !== null) {
-                        $priority = $this->getMiddlewarePriority($mwName);
-                        $pipeline->pipe($mwInstance, $priority);
-                    }
-                }
-
-                // Create the final handler
-                $finalHandler = function ($req) use ($route, $matches) {
-                    $params = [];
-                    foreach ($route['paramNames'] as $name) {
-                        if (isset($matches[$name])) {
-                            $params[] = $matches[$name];
-                        } elseif (isset($route['defaults'][$name])) {
-                            $params[] = $route['defaults'][$name];
-                        } elseif (in_array($name, $route['optionalParams'], true)) {
-                            continue;
-                        } else {
-                            $params[] = null;
-                        }
-                    }
-                    return call_user_func_array($route['handler'], array_merge([$req], $params));
-                };
-
-                $response = $pipeline->process($request, $finalHandler);
-
-                // ── HEAD: strip response body ───────────────────────
-                if ($isHead && $tryMethod === 'GET') {
-                    $response = $response->withBody(Stream::createFromString(''));
-                }
-
-                return $response;
+                $result = $candidate;
+                break;
             }
+
+            if ($result === null) {
+                continue;
+            }
+
+            // Attach parameters to request
+            foreach ($result->parameters as $name => $value) {
+                $request = $request->withAttribute($name, $value);
+            }
+
+            // Apply default values for missing optional params
+            foreach ($result->route->defaults as $name => $default) {
+                if (!isset($result->parameters[$name])) {
+                    $request = $request->withAttribute($name, $default);
+                }
+            }
+
+            // Attach throttle info if present
+            if (isset($result->route->meta['throttle'])) {
+                $request = $request->withAttribute('_route_throttle', $result->route->meta['throttle']);
+            }
+
+            // Build middleware pipeline
+            $middlewareList = $this->expandMiddleware([
+                ...$this->globalMiddleware,
+                ...$result->middleware(),
+            ]);
+
+            $pipeline = new MiddlewarePipeline();
+            foreach ($middlewareList as $mwName) {
+                $mwInstance = $this->resolveMiddleware($mwName);
+                if ($mwInstance !== null) {
+                    $pipeline->pipe($mwInstance, $this->middlewarePriority[$this->baseName($mwName)] ?? 0);
+                }
+            }
+
+            // Final handler
+            $finalHandler = new CallableHandlerAdapter(function (ServerRequestInterface $req) use ($result): ResponseInterface {
+                $handler = $result->handler();
+                $params  = [];
+
+                foreach ($result->route->paramNames as $name) {
+                    $val = $req->getAttribute($name);
+                    if ($val !== null) {
+                        $params[] = $val;
+                    } elseif (in_array($name, $result->route->optionalParams, true)) {
+                        continue;
+                    } else {
+                        $params[] = null;
+                    }
+                }
+
+                // Instantiate class-string handlers: [ClassName, method]
+                if (is_array($handler) && count($handler) === 2 && is_string($handler[0]) && class_exists($handler[0])) {
+                    $instance   = ($this->container !== null && $this->container->has($handler[0]))
+                        ? $this->container->get($handler[0])
+                        : new $handler[0]();
+                    $handler = [$instance, $handler[1]];
+                }
+
+                return call_user_func_array($handler, [$req, ...$params]);
+            });
+
+            $response = $pipeline->process($request, $finalHandler);
+
+            // HEAD → strip body
+            if ($isHead && $tryMethod === 'GET') {
+                $response = $response->withBody(Stream::createFromString(''));
+            }
+
+            return $response;
         }
 
-        // ── OPTIONS auto-response ────────────────────────────────────
-        if ($method === 'OPTIONS' && !empty($allowedMethods)) {
+        // OPTIONS auto-response (domain-aware)
+        $allowedMethods = $this->compiled->getAllowedMethods($path, $host, $this->matchesDomain(...));
+        if ($method === 'OPTIONS' && $allowedMethods !== []) {
             $allowedMethods[] = 'OPTIONS';
-            // HEAD is always available when GET is (auto-delegation)
             if (in_array('GET', $allowedMethods, true) && !in_array('HEAD', $allowedMethods, true)) {
                 $allowedMethods[] = 'HEAD';
             }
-            $uniqueMethods = array_unique($allowedMethods);
-            sort($uniqueMethods);
+            $unique = array_unique($allowedMethods);
+            sort($unique);
 
             return new Response(
                 Stream::createFromString(''),
                 200,
-                [
-                    'Allow' => implode(', ', $uniqueMethods),
-                    'Content-Length' => '0',
-                ]
+                ['Allow' => implode(', ', $unique), 'Content-Length' => '0'],
             );
         }
 
-        // No route matched
-        if (!empty($allowedMethods)) {
-            $uniqueMethods = array_unique($allowedMethods);
-            // HEAD should always be included if GET is allowed
-            if (in_array('GET', $uniqueMethods, true) && !in_array('HEAD', $uniqueMethods, true)) {
-                $uniqueMethods[] = 'HEAD';
+        // 405 Method Not Allowed
+        if ($allowedMethods !== []) {
+            if (in_array('GET', $allowedMethods, true) && !in_array('HEAD', $allowedMethods, true)) {
+                $allowedMethods[] = 'HEAD';
             }
-            return $this->handleMethodNotAllowed($request, $uniqueMethods);
+            return $this->handleMethodNotAllowed($request, array_unique($allowedMethods));
         }
 
         // Fallback handler
-        if ($this->fallbackHandler) {
-            return call_user_func($this->fallbackHandler, $request);
+        if ($this->fallbackHandler !== null) {
+            return ($this->fallbackHandler)($request);
         }
 
-        // Path not found
         return $this->handleNotFound($request);
     }
 
-    /**
-     * Normalize the trailing slash based on the configured strategy.
-     *
-     * @return string|ResponseInterface  Normalized path or a redirect response.
-     */
-    private function normalizeTrailingSlash(string $path, string $method): string|ResponseInterface
+    // ── URL generation ─────────────────────────────────────────
+
+    public function getUrlGenerator(): UrlGenerator
     {
-        if ($path === '/') {
-            return $path;
-        }
-
-        return match ($this->trailingSlashStrategy) {
-            TrailingSlashStrategy::STRIP => rtrim($path, '/'),
-
-            TrailingSlashStrategy::REDIRECT_301 => str_ends_with($path, '/')
-                ? new Response(
-                    Stream::createFromString(''),
-                    301,
-                    ['Location' => rtrim($path, '/')]
-                )
-                : $path,
-
-            TrailingSlashStrategy::ALLOW_BOTH => $path,
-        };
+        return $this->urlGenerator;
     }
 
-    /**
-     * Check if a host matches a domain constraint pattern.
-     *
-     * Supports `{subdomain}.example.com` parameter capture.
-     */
-    private function matchesDomain(string $pattern, string $host): bool
+    public function url(string $name, array $parameters = [], bool $absolute = false): string
     {
-        // Simple literal match
-        if ($pattern === $host) {
-            return true;
-        }
-
-        // Replace parameter placeholders BEFORE quoting so the [^.]+ isn't escaped
-        $withPlaceholders = preg_replace('/\{[^}]+\}/', '__DOMAIN_PARAM__', $pattern);
-        $quoted = preg_quote($withPlaceholders, '#');
-        $regex = str_replace('__DOMAIN_PARAM__', '[^.]+', $quoted);
-
-        return (bool)preg_match('#^' . $regex . '$#i', $host);
+        return $this->urlGenerator->generate($name, $parameters, $absolute);
     }
 
-    // ─── Error handlers ─────────────────────────────────────────────────
+    // ── Accessors ──────────────────────────────────────────────
 
-    /**
-     * Handle 404 Not Found
-     */
+    public function getRoutes(): RouteCollection
+    {
+        return $this->routes;
+    }
+
+    public function getGroupContext(): GroupContext
+    {
+        return $this->groupContext;
+    }
+
+    public function setGroupContext(GroupContext $context): void
+    {
+        $this->groupContext = $context;
+    }
+
+    // ── Error handlers ─────────────────────────────────────────
+
     private function handleNotFound(ServerRequestInterface $request): ResponseInterface
     {
         $method = strtoupper($request->getMethod());
@@ -712,22 +528,19 @@ class Router
             'host'   => $request->getUri()->getHost(),
         ]);
 
-        if ($this->notFoundHandler) {
-            return call_user_func($this->notFoundHandler, $request);
+        if ($this->notFoundHandler !== null) {
+            return ($this->notFoundHandler)($request);
         }
 
-        $body = "404 Not Found\n\nThe requested URL \"{$path}\" was not found on this server.";
+        $safePath = htmlspecialchars($path, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
         return new Response(
-            Stream::createFromString($body),
+            Stream::createFromString("404 Not Found\n\nThe requested URL \"{$safePath}\" was not found on this server."),
             404,
-            ['Content-Type' => 'text/plain']
+            ['Content-Type' => 'text/plain'],
         );
     }
 
-    /**
-     * Handle 405 Method Not Allowed
-     */
     private function handleMethodNotAllowed(ServerRequestInterface $request, array $allowedMethods): ResponseInterface
     {
         $method = strtoupper($request->getMethod());
@@ -741,103 +554,140 @@ class Router
             'host'            => $request->getUri()->getHost(),
         ]);
 
-        if ($this->methodNotAllowedHandler) {
-            return call_user_func($this->methodNotAllowedHandler, $request, $allowedMethods);
+        if ($this->methodNotAllowedHandler !== null) {
+            return ($this->methodNotAllowedHandler)($request, $allowedMethods);
         }
 
-        $body = "405 Method Not Allowed\n\n"
-              . "The {$method} method is not allowed for \"{$path}\".\n"
-              . "Allowed methods: {$allow}";
+        $safePath   = htmlspecialchars($path, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $safeMethod = htmlspecialchars($method, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
         return new Response(
-            Stream::createFromString($body),
+            Stream::createFromString(
+                "405 Method Not Allowed\n\nThe {$safeMethod} method is not allowed for \"{$safePath}\".\nAllowed methods: {$allow}"
+            ),
             405,
-            [
-                'Content-Type' => 'text/plain',
-                'Allow'        => $allow,
-            ]
+            ['Content-Type' => 'text/plain', 'Allow' => $allow],
         );
     }
 
-    /**
-     * Set custom 404 handler
-     */
-    public function setNotFoundHandler(callable $handler): void
+    // ── Internals ──────────────────────────────────────────────
+
+    private function normalizeTrailingSlash(string $path, string $method): string|ResponseInterface
     {
-        $this->notFoundHandler = $handler;
+        if ($path === '/') {
+            return $path;
+        }
+
+        return match ($this->trailingSlashStrategy) {
+            TrailingSlashStrategy::STRIP => rtrim($path, '/'),
+            TrailingSlashStrategy::REDIRECT_301 => str_ends_with($path, '/')
+                ? new Response(Stream::createFromString(''), 301, ['Location' => rtrim($path, '/')])
+                : $path,
+            TrailingSlashStrategy::ALLOW_BOTH => $path,
+        };
+    }
+
+    private function matchesDomain(string $pattern, string $host): bool
+    {
+        if ($pattern === $host) {
+            return true;
+        }
+
+        $withPlaceholders = preg_replace('/\{[^}]+\}/', '__DOMAIN_PARAM__', $pattern);
+        $quoted = preg_quote($withPlaceholders, '#');
+        $regex = str_replace('__DOMAIN_PARAM__', '[^.]+', $quoted);
+
+        return (bool) preg_match('#^' . $regex . '$#i', $host);
     }
 
     /**
-     * Set custom 405 handler
-     */
-    public function setMethodNotAllowedHandler(callable $handler): void
-    {
-        $this->methodNotAllowedHandler = $handler;
-    }
-
-    // ─── URL generation ─────────────────────────────────────────────────
-
-    /**
-     * Get the URL generator
-     */
-    public function getUrlGenerator(): UrlGenerator
-    {
-        return $this->urlGenerator;
-    }
-
-    /**
-     * Generate a URL for a named route
-     */
-    public function url(string $name, array $parameters = [], bool $absolute = false): string
-    {
-        return $this->urlGenerator->generate($name, $parameters, $absolute);
-    }
-
-    /**
-     * Get route collection
-     */
-    public function getRoutes(): RouteCollection
-    {
-        return $this->routes;
-    }
-
-    // ─── Internal helpers ───────────────────────────────────────────────
-
-    /**
-     * Extract parameter names from a path
+     * @return list<string>
      */
     private function extractParamNames(string $path): array
     {
-        preg_match_all('/\{([^}:?]+)/', $path, $matches);
+        preg_match_all('/\{([^}:?+]+)/', $path, $matches);
         return $matches[1] ?? [];
     }
 
-    /**
-     * Instantiate a middleware class, optionally with parameters.
-     *
-     * Note: parameters parsed from strings like "throttle:60,1" are forwarded
-     * as raw strings. Middleware constructors with typed parameters (int, float)
-     * should accept strings and cast internally, or use setParameters() instead.
-     */
-    private function instantiateMiddleware(string $class, array $params = []): object
+    private function resolveMiddleware(string $name): ?MiddlewareInterface
     {
-        if ($this->container !== null && $this->container->has($class)) {
-            return $this->container->get($class);
+        $params = [];
+        if (str_contains($name, ':')) {
+            [$name, $paramStr] = explode(':', $name, 2);
+            $params = explode(',', $paramStr);
         }
 
-        if (!empty($params)) {
+        // Named middleware
+        if (isset($this->middleware[$name])) {
+            $mw = clone $this->middleware[$name];
+            $this->applyParameters($mw, $params);
+            return $mw;
+        }
+
+        // DI container
+        if ($this->container !== null && $this->container->has($name)) {
+            $instance = $this->container->get($name);
+            if ($instance instanceof MiddlewareInterface) {
+                $this->applyParameters($instance, $params);
+                return $instance;
+            }
+        }
+
+        // Class name
+        if (class_exists($name)) {
+            $instance = $this->instantiateMiddleware($name, $params);
+            if ($instance instanceof MiddlewareInterface) {
+                return $instance;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function expandMiddleware(array $middlewareList): array
+    {
+        $expanded = [];
+        foreach ($middlewareList as $mw) {
+            $baseName = $this->baseName($mw);
+            if (isset($this->middlewareGroups[$baseName])) {
+                $expanded = [...$expanded, ...$this->expandMiddleware($this->middlewareGroups[$baseName])];
+            } else {
+                $expanded[] = $mw;
+            }
+        }
+        return $expanded;
+    }
+
+    private function baseName(string $name): string
+    {
+        return str_contains($name, ':') ? explode(':', $name, 2)[0] : $name;
+    }
+
+    private function instantiateMiddleware(string $class, array $params = []): MiddlewareInterface
+    {
+        if ($this->container !== null && $this->container->has($class)) {
+            $instance = $this->container->get($class);
+            if ($instance instanceof MiddlewareInterface) {
+                return $instance;
+            }
+            throw new \InvalidArgumentException(
+                "Container entry [{$class}] does not implement MiddlewareInterface.",
+            );
+        }
+
+        if ($params !== []) {
             return new $class(...$params);
         }
 
         return new $class();
     }
 
-    /**
-     * Apply parameters to a middleware instance if it supports them.
-     */
     private function applyParameters(object $middleware, array $params): void
     {
-        if (empty($params)) {
+        if ($params === []) {
             return;
         }
 
@@ -845,28 +695,4 @@ class Router
             $middleware->setParameters($params);
         }
     }
-
-    /**
-     * Get the configured priority for a middleware name.
-     */
-    private function getMiddlewarePriority(string $name): int
-    {
-        // Strip parameters for lookup
-        $baseName = str_contains($name, ':')
-            ? explode(':', $name, 2)[0]
-            : $name;
-
-        return $this->middlewarePriority[$baseName]['priority'] ?? 0;
-    }
-
-    // ─── Group context methods ──────────────────────────────────────────
-
-    public function getCurrentPrefix(): string { return $this->currentPrefix; }
-    public function setCurrentPrefix(string $prefix): void { $this->currentPrefix = $prefix; }
-    public function getCurrentMiddleware(): array { return $this->currentMiddleware; }
-    public function setCurrentMiddleware(array $middleware): void { $this->currentMiddleware = $middleware; }
-    public function getCurrentWhere(): array { return $this->currentWhere; }
-    public function setCurrentWhere(array $where): void { $this->currentWhere = $where; }
-    public function getCurrentDomain(): string { return $this->currentDomain; }
-    public function setCurrentDomain(string $domain): void { $this->currentDomain = $domain; }
 }

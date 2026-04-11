@@ -6,21 +6,22 @@ namespace MonkeysLegion\Router;
 use InvalidArgumentException;
 
 /**
+ * MonkeysLegion Framework — Router Package
+ *
  * Generate and validate signed (tamper-proof) URLs.
  *
- * Useful for email verification links, temporary download URLs, etc.
- *
  * Usage:
- *   $signed = $signedUrl->generate('verify-email', ['id' => 42], expiration: 3600);
- *   // → /verify-email/42?expires=1700000000&signature=abc123…
+ *   $url = $signed->generate('verify-email', ['id' => 42], expiration: 3600);
+ *   $isValid = $signed->validate($url);
  *
- *   $isValid = $signedUrl->validate($signed);  // true if signature is valid and not expired
+ * @copyright 2026 MonkeysCloud Team
+ * @license   MIT
  */
-class SignedUrlGenerator
+final class SignedUrlGenerator
 {
     public function __construct(
-        private UrlGenerator $urlGenerator,
-        private string $secret
+        private readonly UrlGenerator $urlGenerator,
+        private readonly string       $secret,
     ) {
         if (strlen($secret) < 16) {
             throw new InvalidArgumentException('Secret must be at least 16 characters.');
@@ -30,50 +31,45 @@ class SignedUrlGenerator
     /**
      * Generate a signed URL for a named route.
      *
-     * @param string   $routeName   Named route identifier
-     * @param array    $parameters  Route parameters
-     * @param int|null $expiration  TTL in seconds (null = never expires)
-     * @param string   $baseUrl     Optional base URL for absolute URLs
+     * @param string              $routeName  Named route identifier.
+     * @param array<string,mixed> $parameters Route parameters.
+     * @param int|null            $expiration TTL in seconds (null = never expires).
+     * @param string              $baseUrl    Optional base URL for absolute URLs.
      */
     public function generate(
         string $routeName,
-        array $parameters = [],
-        ?int $expiration = null,
-        string $baseUrl = ''
+        array  $parameters = [],
+        ?int   $expiration = null,
+        string $baseUrl = '',
     ): string {
         $query = [];
 
         if ($expiration !== null) {
-            $query['expires'] = (string)(time() + $expiration);
+            $query['expires'] = (string) (time() + $expiration);
         }
 
-        // Generate the base URL — if a custom baseUrl is provided,
-        // temporarily set it on the UrlGenerator
+        // Temporarily set base URL
         $previousBase = null;
         if ($baseUrl !== '') {
-            $previousBase = $this->urlGenerator->getBaseUrl();
-            $this->urlGenerator->setBaseUrl($baseUrl);
+            $previousBase = $this->urlGenerator->baseUrl;
+            $this->urlGenerator->baseUrl = $baseUrl;
         }
 
-        $url = $this->urlGenerator->generate(
-            $routeName,
-            $parameters,
-            $baseUrl !== ''
-        );
+        $url = $this->urlGenerator->generate($routeName, $parameters, $baseUrl !== '');
 
         // Restore previous base URL
         if ($previousBase !== null) {
-            $this->urlGenerator->setBaseUrl($previousBase);
+            $this->urlGenerator->baseUrl = $previousBase;
         } elseif ($baseUrl !== '') {
-            $this->urlGenerator->setBaseUrl('');
+            $this->urlGenerator->baseUrl = '';
         }
 
-        if (!empty($query)) {
+        if ($query !== []) {
             $separator = str_contains($url, '?') ? '&' : '?';
             $url .= $separator . http_build_query($query);
         }
 
-        // Compute HMAC signature over the full URL
+        // Compute HMAC signature
         $signature = hash_hmac('sha256', $url, $this->secret);
         $url .= (str_contains($url, '?') ? '&' : '?') . 'signature=' . $signature;
 
@@ -81,10 +77,19 @@ class SignedUrlGenerator
     }
 
     /**
+     * Generate a temporary signed route (convenience shorthand).
+     */
+    public function temporarySignedRoute(
+        string $routeName,
+        int    $expiresInSeconds,
+        array  $parameters = [],
+        string $baseUrl = '',
+    ): string {
+        return $this->generate($routeName, $parameters, $expiresInSeconds, $baseUrl);
+    }
+
+    /**
      * Validate that a URL has a correct, unexpired signature.
-     *
-     * @param string $url  The full URL to validate
-     * @return bool
      */
     public function validate(string $url): bool
     {
@@ -92,6 +97,7 @@ class SignedUrlGenerator
         if ($parts === false) {
             return false;
         }
+
         $query = [];
         parse_str($parts['query'] ?? '', $query);
 
@@ -103,20 +109,24 @@ class SignedUrlGenerator
         unset($query['signature']);
 
         // Check expiration
-        if (isset($query['expires']) && (int)$query['expires'] < time()) {
+        if (isset($query['expires']) && (int) $query['expires'] < time()) {
             return false;
         }
 
         // Reconstruct URL without signature
-        $baseUrl = ($parts['scheme'] ?? '') . '://' . ($parts['host'] ?? '') . ($parts['path'] ?? '');
-        if (!empty($query)) {
+        $baseUrl = ($parts['scheme'] ?? '') . '://' . ($parts['host'] ?? '');
+        if (isset($parts['port'])) {
+            $baseUrl .= ':' . $parts['port'];
+        }
+        $baseUrl .= ($parts['path'] ?? '');
+        if ($query !== []) {
             $baseUrl .= '?' . http_build_query($query);
         }
 
         // Strip scheme://host if not present in original
         if (!isset($parts['scheme'])) {
             $baseUrl = $parts['path'] ?? '';
-            if (!empty($query)) {
+            if ($query !== []) {
                 $baseUrl .= '?' . http_build_query($query);
             }
         }

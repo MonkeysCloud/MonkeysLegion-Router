@@ -6,53 +6,66 @@ namespace MonkeysLegion\Router;
 use InvalidArgumentException;
 
 /**
+ * MonkeysLegion Framework — Router Package
+ *
  * URL generator for creating URLs from named routes.
+ *
+ * v2: property hook for baseUrl, model binding support.
+ *
+ * @copyright 2026 MonkeysCloud Team
+ * @license   MIT
  */
-class UrlGenerator
+final class UrlGenerator
 {
     /**
-     * @var array<string, array{path: string, methods: array<string>, paramNames: array<string>}>
+     * @var array<string, array{path: string, methods: list<string>, paramNames: list<string>}>
      */
     private array $namedRoutes = [];
 
-    private string $baseUrl = '';
+    private string $_baseUrl;
+
+    public string $baseUrl {
+        get => $this->_baseUrl;
+        set(string $value) {
+            $this->_baseUrl = rtrim($value, '/');
+        }
+    }
+
+    public function __construct()
+    {
+        $this->_baseUrl = '';
+    }
 
     /**
-     * Register a named route
+     * Register a named route for URL generation.
+     *
+     * @param string       $name
+     * @param string       $path
+     * @param list<string> $methods
+     * @param list<string> $paramNames
      */
     public function register(string $name, string $path, array $methods, array $paramNames): void
     {
         $this->namedRoutes[$name] = [
-            'path' => $path,
-            'methods' => $methods,
+            'path'       => $path,
+            'methods'    => $methods,
             'paramNames' => $paramNames,
         ];
     }
 
     /**
-     * Set the base URL for absolute URL generation
-     */
-    public function setBaseUrl(string $baseUrl): void
-    {
-        $this->baseUrl = rtrim($baseUrl, '/');
-    }
-
-    /**
-     * Get the current base URL.
-     */
-    public function getBaseUrl(): string
-    {
-        return $this->baseUrl;
-    }
-
-    /**
-     * Generate a URL for a named route
+     * Generate a URL for a named route.
      *
-     * @param string $name       Route name
-     * @param array  $parameters Parameters to substitute
-     * @param bool   $absolute   Generate absolute URL (includes base URL)
-     * @return string Generated URL
-     * @throws InvalidArgumentException If route not found or missing parameters
+     * Parameters can be:
+     *  - scalar values: ['id' => 42]
+     *  - objects with an `id` property (route model binding): ['user' => $userEntity]
+     *
+     * @param string              $name       Route name.
+     * @param array<string,mixed> $parameters Parameters to substitute.
+     * @param bool                $absolute   Generate absolute URL.
+     *
+     * @return string Generated URL.
+     * @throws InvalidArgumentException If route not found or missing parameters.
      */
     public function generate(string $name, array $parameters = [], bool $absolute = false): string
     {
@@ -60,18 +73,35 @@ class UrlGenerator
             throw new InvalidArgumentException("Route '{$name}' not found.");
         }
 
-        $route = $this->namedRoutes[$name];
-        $path = $route['path'];
+        $route     = $this->namedRoutes[$name];
+        $path      = $route['path'];
         $usedParams = [];
+
+        // Resolve model objects into their identifiers
+        $resolved = [];
+        foreach ($parameters as $key => $value) {
+            if (is_object($value)) {
+                $resolved[$key] = match (true) {
+                    property_exists($value, 'id')           => (string) $value->id,
+                    method_exists($value, 'getRouteKey')    => (string) $value->getRouteKey(),
+                    $value instanceof \BackedEnum           => $value->value,
+                    default => throw new InvalidArgumentException(
+                        "Cannot resolve object of type " . $value::class . " to a route parameter."
+                    ),
+                };
+            } else {
+                $resolved[$key] = (string) $value;
+            }
+        }
 
         // Replace path parameters
         $path = preg_replace_callback(
-            '/\{([^}:?]+)([^}]*)?\}/',
-            function ($matches) use ($parameters, &$usedParams) {
-                $paramName = $matches[1];
-                $isOptional = str_ends_with($matches[0], '?}');
+            '/\{([^}:?+]+)([^}]*)?\}/',
+            function (array $m) use ($resolved, &$usedParams): string {
+                $paramName  = $m[1];
+                $isOptional = str_ends_with($m[0], '?}');
 
-                if (!isset($parameters[$paramName])) {
+                if (!isset($resolved[$paramName])) {
                     if ($isOptional) {
                         return '';
                     }
@@ -79,37 +109,34 @@ class UrlGenerator
                 }
 
                 $usedParams[] = $paramName;
-                return $parameters[$paramName];
+                return $resolved[$paramName];
             },
-            $path
+            $path,
         );
 
-        // Remove trailing slash if path ended with optional parameter
+        // Remove trailing slash from optional parameter removal
         $path = rtrim($path, '/') ?: '/';
 
-        // Add remaining parameters as query string
-        $remaining = array_diff_key($parameters, array_flip($usedParams));
-        if (!empty($remaining)) {
+        // Remaining params → query string
+        $remaining = array_diff_key($resolved, array_flip($usedParams));
+        if ($remaining !== []) {
             $path .= '?' . http_build_query($remaining);
         }
 
-        if ($absolute && $this->baseUrl) {
+        if ($absolute && $this->baseUrl !== '') {
             return $this->baseUrl . $path;
         }
 
         return $path;
     }
 
-    /**
-     * Check if a named route exists
-     */
     public function has(string $name): bool
     {
         return isset($this->namedRoutes[$name]);
     }
 
     /**
-     * Get all registered route names
+     * @return list<string>
      */
     public function getRouteNames(): array
     {
@@ -117,7 +144,7 @@ class UrlGenerator
     }
 
     /**
-     * Get route information by name
+     * @return array{path: string, methods: list<string>, paramNames: list<string>}|null
      */
     public function getRoute(string $name): ?array
     {

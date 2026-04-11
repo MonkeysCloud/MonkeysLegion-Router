@@ -7,193 +7,126 @@ use MonkeysLegion\Router\Constraints\RouteConstraints;
 use InvalidArgumentException;
 
 /**
- * Enhanced route collection with support for constraints, middleware, and named routes.
+ * MonkeysLegion Framework — Router Package
+ *
+ * Stores route definitions and compiles path templates into regex.
+ *
+ * v2 improvements:
+ *  • Accepts `array|callable|\Closure` handlers (not just callable)
+ *  • Stores routes as `RouteDefinition` value objects
+ *  • `freeze()` makes the collection immutable after compilation
+ *  • Method-indexed lookups for O(1) method filtering
+ *
+ * @copyright 2026 MonkeysCloud Team
+ * @license   MIT
  */
-class RouteCollection
+final class RouteCollection
 {
-    /**
-     * @var array<int, array{
-     *     method: string,
-     *     path: string,
-     *     regex: string,
-     *     paramNames: array<string>,
-     *     optionalParams: array<string>,
-     *     handler: callable,
-     *     specificity: int,
-     *     name: string,
-     *     middleware: array<string>,
-     *     constraints: array<string, string>,
-     *     defaults: array<string, mixed>,
-     *     domain: string,
-     *     meta: array<string, mixed>
-     * }>
-     */
+    /** @var list<RouteDefinition> */
     private array $routes = [];
 
-    /**
-     * @var array<string, int> Map of route names to route indices
-     */
+    /** @var array<string, int> Map of route names → indices. */
     private array $namedRoutes = [];
 
+    /** @var array<string, list<int>> Method → route indices. */
+    private array $methodIndex = [];
+
     private bool $needsSorting = false;
+    private bool $frozen = false;
+
+    // ── Registration ───────────────────────────────────────────
 
     /**
-     * Add a new route to the collection
+     * Add a new route to the collection.
+     *
+     * @param string                       $method      HTTP method.
+     * @param string                       $path        URI template.
+     * @param array|callable|\Closure      $handler     Route handler.
+     * @param string                       $name        Route name.
+     * @param list<string>                 $middleware  Middleware list.
+     * @param array<string, string>        $constraints Parameter constraints.
+     * @param array<string, mixed>         $defaults    Default parameter values.
+     * @param string                       $domain      Domain constraint.
+     * @param array<string, mixed>         $meta        Additional metadata.
      */
     public function add(
-        string $method,
-        string $path,
-        callable $handler,
-        string $name = '',
-        array $middleware = [],
-        array $constraints = [],
-        array $defaults = [],
-        string $domain = '',
-        array $meta = []
+        string               $method,
+        string               $path,
+        array|callable|\Closure $handler,
+        string               $name        = '',
+        array                $middleware  = [],
+        array                $constraints = [],
+        array                $defaults    = [],
+        string               $domain      = '',
+        array                $meta        = [],
     ): void {
-        // Normalize trailing slashes (keep root '/')
-        $path = $path !== '/' ? rtrim($path, '/') : $path;
+        if ($this->frozen) {
+            throw new \LogicException('Cannot add routes to a frozen collection.');
+        }
 
-        $paramNames = [];
-        $optionalParams = [];
-        $constraints = $constraints ?: [];
+        $method = strtoupper($method);
+        $path   = $path !== '/' ? rtrim($path, '/') : $path;
 
-        // Extract inline constraints from path: {id:\d+} or {id:int}
-        // Also detect greedy/catch-all parameters: {path+}
-        $greedyParams = [];
-        $path = preg_replace_callback(
-            '/\{([^}:?+]+)([+])?:?([^}?]*)(\?)?\}/',
-            function ($matches) use (&$constraints, &$greedyParams) {
-                $paramName = $matches[1];
-                $isGreedy = !empty($matches[2]);
-                $constraint = $matches[3] ?? '';
-                $isOptional = !empty($matches[4]);
+        // Reject paths containing null bytes or control characters
+        if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $path) === 1) {
+            throw new InvalidArgumentException(
+                'Route path must not contain null bytes or control characters.'
+            );
+        }
 
-                if ($isGreedy) {
-                    $greedyParams[] = $paramName;
-                }
+        // Normalize handler: callable must become Closure or array for property storage
+        if (!is_array($handler) && !$handler instanceof \Closure) {
+            $handler = \Closure::fromCallable($handler);
+        }
 
-                if ($constraint !== '') {
-                    $constraints[$paramName] = $constraint;
-                }
+        // Auto-populate meta['handler'] for array handlers (OpenAPI)
+        if (is_array($handler) && count($handler) >= 2 && !isset($meta['handler'])) {
+            $meta['handler'] = $handler;
+        }
 
-                return '{' . $paramName . ($isGreedy ? '+' : '') . ($isOptional ? '?' : '') . '}';
-            },
-            $path
-        );
+        // Extract inline constraints and build regex
+        [$regex, $paramNames, $optionalParams, $constraints] = $this->compilePath($path, $constraints);
 
-        // Convert path to regex with parameter capture groups
-        $regex = preg_replace_callback(
-            '/(\/?)(\{([^}?+]+)([+])?(\?)?\})/',
-            function (array $matches) use (&$paramNames, &$optionalParams, $constraints, $greedyParams) {
-                $leadingSlash = $matches[1];
-                $paramName = $matches[3];
-                $isGreedy = !empty($matches[4]);
-                $isOptional = !empty($matches[5]);
-
-                $paramNames[] = $paramName;
-
-                if ($isOptional) {
-                    $optionalParams[] = $paramName;
-                }
-
-                // Get constraint pattern
-                if ($isGreedy || in_array($paramName, $greedyParams, true)) {
-                    // Greedy/catch-all: match everything including slashes
-                    $pattern = '.+';
-                } elseif (isset($constraints[$paramName])) {
-                    $constraint = RouteConstraints::get($constraints[$paramName]);
-                    $pattern = $constraint->getPattern();
-                } else {
-                    $pattern = '[^/]+';
-                }
-
-                $capture = '(?P<' . $paramName . '>' . $pattern . ')';
-
-                // For optional params, include the leading slash in the optional group
-                if ($isOptional) {
-                    return '(?:' . $leadingSlash . $capture . ')?';
-                }
-
-                return $leadingSlash . $capture;
-            },
-            $path
-        );
-
-        // Anchor to beginning/end
-        $regex = '#^' . $regex . '$#';
-
-        // Calculate specificity score
         $specificity = $this->calculateSpecificity($path, $paramNames, $optionalParams);
 
-        $routeIndex = count($this->routes);
+        $index = count($this->routes);
 
-        $this->routes[] = [
-            'method' => strtoupper($method),
-            'path' => $path,
-            'regex' => $regex,
-            'paramNames' => $paramNames,
-            'optionalParams' => $optionalParams,
-            'handler' => $handler,
-            'specificity' => $specificity,
-            'name' => $name,
-            'middleware' => $middleware,
-            'constraints' => $constraints,
-            'defaults' => $defaults,
-            'domain' => $domain,
-            'meta' => $meta,
-        ];
+        $this->routes[] = new RouteDefinition(
+            method:         $method,
+            path:           $path,
+            regex:          $regex,
+            handler:        $handler,
+            paramNames:     $paramNames,
+            optionalParams: $optionalParams,
+            name:           $name,
+            middleware:     $middleware,
+            constraints:   $constraints,
+            defaults:      $defaults,
+            domain:        $domain,
+            meta:          $meta,
+            specificity:   $specificity,
+        );
 
-        // Register named route
+        // Method index
+        $this->methodIndex[$method][] = $index;
+
+        // Named route
         if ($name !== '') {
             if (isset($this->namedRoutes[$name])) {
                 throw new InvalidArgumentException("Route name '{$name}' is already registered.");
             }
-            $this->namedRoutes[$name] = $routeIndex;
+            $this->namedRoutes[$name] = $index;
         }
 
         $this->needsSorting = true;
     }
 
-    /**
-     * Calculate route specificity score (higher = more specific)
-     */
-    private function calculateSpecificity(string $path, array $paramNames, array $optionalParams): int
-    {
-        $score = 0;
-
-        // Split path into segments
-        $segments = array_filter(explode('/', trim($path, '/')));
-
-        foreach ($segments as $segment) {
-            // Static segments are most specific
-            if (!str_contains($segment, '{')) {
-                $score += 10000;
-            }
-            // Required parameters are moderately specific
-            elseif (!str_ends_with($segment, '?}')) {
-                $score += 100;
-            }
-            // Optional parameters are least specific
-            else {
-                $score += 1;
-            }
-        }
-
-        // Longer paths are generally more specific
-        $score += count($segments) * 50;
-
-        // Paths with constraints are more specific
-        $score += count($paramNames) * 10;
-
-        // Penalize optional parameters
-        $score -= count($optionalParams) * 50;
-
-        return $score;
-    }
+    // ── Accessors ──────────────────────────────────────────────
 
     /**
-     * Get all registered routes, sorted by specificity
+     * Get all routes sorted by specificity.
+     *
+     * @return list<RouteDefinition>
      */
     public function all(): array
     {
@@ -201,131 +134,239 @@ class RouteCollection
             $this->sortRoutes();
             $this->needsSorting = false;
         }
-
         return $this->routes;
     }
 
     /**
-     * Get a route by name
+     * Get routes for a specific HTTP method.
+     *
+     * @return list<RouteDefinition>
      */
-    public function getByName(string $name): ?array
+    public function getByMethod(string $method): array
+    {
+        $method  = strtoupper($method);
+        $indices = $this->methodIndex[$method] ?? [];
+        $routes  = [];
+        foreach ($indices as $i) {
+            $routes[] = $this->routes[$i];
+        }
+        return $routes;
+    }
+
+    /**
+     * Get a route by name.
+     */
+    public function getByName(string $name): ?RouteDefinition
     {
         if (!isset($this->namedRoutes[$name])) {
             return null;
         }
-
         return $this->routes[$this->namedRoutes[$name]] ?? null;
     }
 
-    /**
-     * Get all named routes
-     */
-    public function getNamedRoutes(): array
-    {
-        return $this->namedRoutes;
-    }
-
-    /**
-     * Check if a named route exists
-     */
     public function hasName(string $name): bool
     {
         return isset($this->namedRoutes[$name]);
     }
 
     /**
-     * Sort routes by method and specificity
-     */
-    private function sortRoutes(): void
-    {
-        usort($this->routes, function ($a, $b) {
-            // First sort by method
-            if ($a['method'] !== $b['method']) {
-                return strcmp($a['method'], $b['method']);
-            }
-
-            // Then by specificity (higher first)
-            return $b['specificity'] <=> $a['specificity'];
-        });
-
-        // Rebuild named route index after sorting
-        $this->namedRoutes = [];
-        foreach ($this->routes as $index => $route) {
-            if ($route['name'] !== '') {
-                $this->namedRoutes[$route['name']] = $index;
-            }
-        }
-    }
-
-    /**
-     * Get routes matching a specific method
-     */
-    public function getByMethod(string $method): array
-    {
-        $method = strtoupper($method);
-        return array_filter($this->all(), fn($route) => $route['method'] === $method);
-    }
-
-    /**
-     * Get all HTTP methods registered
-     */
-    public function getMethods(): array
-    {
-        return array_unique(array_map(fn($route) => $route['method'], $this->routes));
-    }
-
-    /**
-     * Get all HTTP methods registered for a given path.
+     * Get all HTTP methods that have at least one route matching a path.
      *
-     * Used internally for OPTIONS auto-response and 405 handling.
+     * @return list<string>
      */
     public function getMethodsForPath(string $path): array
     {
         $methods = [];
         foreach ($this->all() as $route) {
-            if (preg_match($route['regex'], $path)) {
-                $methods[] = $route['method'];
+            if (preg_match($route->regex, $path)) {
+                $methods[] = $route->method;
             }
         }
-        return array_unique($methods);
+        return array_values(array_unique($methods));
     }
 
     /**
-     * Export routes for caching
+     * Get all registered HTTP methods.
+     *
+     * @return list<string>
+     */
+    public function getMethods(): array
+    {
+        return array_keys($this->methodIndex);
+    }
+
+    public function count(): int
+    {
+        return count($this->routes);
+    }
+
+    /**
+     * Freeze the collection — no more routes can be added.
+     */
+    public function freeze(): void
+    {
+        if ($this->needsSorting) {
+            $this->sortRoutes();
+            $this->needsSorting = false;
+        }
+        $this->frozen = true;
+    }
+
+    public function isFrozen(): bool
+    {
+        return $this->frozen;
+    }
+
+    // ── Cache ──────────────────────────────────────────────────
+
+    /**
+     * Export for cache serialization.
+     *
+     * @return array<string, mixed>
      */
     public function export(): array
     {
         return [
-            'routes' => $this->routes,
+            'routes'      => array_map(fn(RouteDefinition $r) => $r->toArray(), $this->routes),
             'namedRoutes' => $this->namedRoutes,
         ];
     }
 
     /**
-     * Import routes from cache
+     * Import from cached data.
      */
     public function import(array $data): void
     {
-        $this->routes = $data['routes'] ?? [];
+        $this->routes = [];
         $this->namedRoutes = $data['namedRoutes'] ?? [];
+        $this->methodIndex = [];
+
+        foreach (($data['routes'] ?? []) as $i => $arr) {
+            $def = new RouteDefinition(...$arr);
+            $this->routes[] = $def;
+            $this->methodIndex[$def->method][] = $i;
+        }
+
         $this->needsSorting = false;
     }
 
-    /**
-     * Clear all routes
-     */
     public function clear(): void
     {
-        $this->routes = [];
+        $this->routes      = [];
         $this->namedRoutes = [];
+        $this->methodIndex = [];
         $this->needsSorting = false;
+        $this->frozen       = false;
     }
 
+    // ── Internals ──────────────────────────────────────────────
+
     /**
-     * Get route count
+     * Compile a path template into a regex pattern.
+     *
+     * @return array{0: string, 1: list<string>, 2: list<string>, 3: array<string, string>}
      */
-    public function count(): int
+    private function compilePath(string $path, array $constraints): array
     {
-        return count($this->routes);
+        $paramNames     = [];
+        $optionalParams = [];
+        $greedyParams   = [];
+
+        // Extract inline constraints: {id:\d+}, {path+}, {slug?}
+        $path = preg_replace_callback(
+            '/\{([^}:?+]+)([+])?:?([^}?]*)(\?)?}/',
+            function (array $m) use (&$constraints, &$greedyParams): string {
+                $name     = $m[1];
+                $greedy   = !empty($m[2]);
+                $inline   = $m[3] ?? '';
+                $optional = !empty($m[4]);
+
+                if ($greedy) {
+                    $greedyParams[] = $name;
+                }
+                if ($inline !== '') {
+                    $constraints[$name] = $inline;
+                }
+
+                return '{' . $name . ($greedy ? '+' : '') . ($optional ? '?' : '') . '}';
+            },
+            $path,
+        );
+
+        // Build regex
+        $regex = preg_replace_callback(
+            '/(\/?)(\{([^}?+]+)([+])?(\?)?\})/',
+            function (array $m) use (&$paramNames, &$optionalParams, $constraints, $greedyParams): string {
+                $slash    = $m[1];
+                $name     = $m[3];
+                $greedy   = !empty($m[4]);
+                $optional = !empty($m[5]);
+
+                $paramNames[] = $name;
+                if ($optional) {
+                    $optionalParams[] = $name;
+                }
+
+                if ($greedy || in_array($name, $greedyParams, true)) {
+                    $pattern = '.+';
+                } elseif (isset($constraints[$name])) {
+                    $pattern = RouteConstraints::get($constraints[$name])->getPattern();
+                } else {
+                    $pattern = '[^/]+';
+                }
+
+                $capture = '(?P<' . $name . '>' . $pattern . ')';
+
+                return $optional
+                    ? '(?:' . $slash . $capture . ')?'
+                    : $slash . $capture;
+            },
+            $path,
+        );
+
+        $regex = '#^' . $regex . '$#';
+
+        return [$regex, $paramNames, $optionalParams, $constraints];
+    }
+
+    private function calculateSpecificity(string $path, array $paramNames, array $optionalParams): int
+    {
+        $score    = 0;
+        $segments = array_filter(explode('/', trim($path, '/')));
+
+        foreach ($segments as $seg) {
+            if (!str_contains($seg, '{')) {
+                $score += 10000; // static
+            } elseif (!str_ends_with($seg, '?}')) {
+                $score += 100; // required param
+            } else {
+                $score += 1; // optional param
+            }
+        }
+
+        $score += count($segments) * 50;
+        $score += count($paramNames) * 10;
+        $score -= count($optionalParams) * 50;
+
+        return $score;
+    }
+
+    private function sortRoutes(): void
+    {
+        usort($this->routes, static function (RouteDefinition $a, RouteDefinition $b): int {
+            return $a->method !== $b->method
+                ? strcmp($a->method, $b->method)
+                : $b->specificity <=> $a->specificity;
+        });
+
+        // Rebuild indices
+        $this->namedRoutes = [];
+        $this->methodIndex = [];
+        foreach ($this->routes as $i => $route) {
+            if ($route->name !== '') {
+                $this->namedRoutes[$route->name] = $i;
+            }
+            $this->methodIndex[$route->method][] = $i;
+        }
     }
 }
