@@ -136,7 +136,7 @@ final class ControllerScanner
                 $route = $attr->newInstance();
 
                 $fullPath = $controllerPrefix . ($route->path === '' ? '' : '/' . ltrim($route->path, '/'));
-                $fullPath = $fullPath !== '' ? rtrim($fullPath, '/') : '/';
+                $fullPath = $fullPath !== '' ? (rtrim($fullPath, '/') ?: '/') : '/';
                 $middleware = [...$methodMiddleware, ...$route->middleware];
 
                 $meta = [
