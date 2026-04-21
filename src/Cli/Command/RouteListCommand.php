@@ -62,11 +62,11 @@ final class RouteListCommand extends Command
 
         // Print routes
         foreach ($routes as $route) {
-            $method = $route['method'] ?? '-';
-            $path = $this->truncate($route['path'] ?? '', $pathWidth - 2);
+            $method = $route->method ?? '-';
+            $path = $this->truncate($route->path ?? '', $pathWidth - 2);
 
             // Get handler info
-            $handler = $route['handler'] ?? null;
+            $handler = $route->handler ?? null;
             $handlerStr = '-';
             if (is_array($handler)) {
                 $class = is_object($handler[0]) ? get_class($handler[0]) : (string)$handler[0];
