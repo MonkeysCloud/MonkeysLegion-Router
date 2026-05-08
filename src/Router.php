@@ -416,31 +416,19 @@ final class Router
                 }
             }
 
-            // Final handler
+            // Final handler — reflection-based parameter injection
             $finalHandler = new CallableHandlerAdapter(function (ServerRequestInterface $req) use ($result): ResponseInterface {
                 $handler = $result->handler();
-                $params  = [];
-
-                foreach ($result->route->paramNames as $name) {
-                    $val = $req->getAttribute($name);
-                    if ($val !== null) {
-                        $params[] = $val;
-                    } elseif (in_array($name, $result->route->optionalParams, true)) {
-                        continue;
-                    } else {
-                        $params[] = null;
-                    }
-                }
 
                 // Instantiate class-string handlers: [ClassName, method]
                 if (is_array($handler) && count($handler) === 2 && is_string($handler[0]) && class_exists($handler[0])) {
-                    $instance   = ($this->container !== null && $this->container->has($handler[0]))
+                    $instance = ($this->container !== null && $this->container->has($handler[0]))
                         ? $this->container->get($handler[0])
                         : new $handler[0]();
                     $handler = [$instance, $handler[1]];
                 }
 
-                return call_user_func_array($handler, [$req, ...$params]);
+                return call_user_func_array($handler, $this->resolveHandlerArgs($handler, $req, $result));
             });
 
             $response = $pipeline->process($request, $finalHandler);
@@ -571,6 +559,107 @@ final class Router
     }
 
     // ── Internals ──────────────────────────────────────────────
+
+    /**
+     * Resolve controller method arguments using reflection.
+     *
+     * For each parameter in the handler's signature:
+     *  1. If typed as ServerRequestInterface → inject $request.
+     *  2. If the param name matches a route parameter → inject the route value (cast to the declared type).
+     *  3. If the DI container can resolve the type → inject from container.
+     *  4. If the param has a default value → use the default.
+     *  5. Otherwise → null.
+     *
+     * This allows controllers to declare parameters either way:
+     *   show(ServerRequestInterface $request)           → receives full request
+     *   show(string $domain)                             → receives route param directly
+     *   show(ServerRequestInterface $request, string $domain) → both
+     *
+     * @return list<mixed>
+     */
+    private function resolveHandlerArgs(callable|array $handler, ServerRequestInterface $request, MatchResult $result): array
+    {
+        try {
+            if (is_array($handler) && count($handler) === 2) {
+                $ref = new \ReflectionMethod($handler[0], $handler[1]);
+            } elseif ($handler instanceof \Closure) {
+                $ref = new \ReflectionFunction($handler);
+            } else {
+                // Fallback for other callables — send request + positional params
+                return [$request, ...array_values($result->parameters)];
+            }
+        } catch (\ReflectionException) {
+            return [$request, ...array_values($result->parameters)];
+        }
+
+        $args = [];
+
+        foreach ($ref->getParameters() as $param) {
+            $paramName = $param->getName();
+            $paramType = $param->getType();
+            $typeName  = ($paramType instanceof \ReflectionNamedType) ? $paramType->getName() : null;
+
+            // 1. ServerRequestInterface (or any PSR-7 request supertype)
+            if ($typeName !== null && (
+                $typeName === ServerRequestInterface::class
+                || is_a($typeName, ServerRequestInterface::class, true)
+            )) {
+                $args[] = $request;
+                continue;
+            }
+
+            // 2. Named route parameter match
+            $routeValue = $request->getAttribute($paramName);
+            if ($routeValue !== null) {
+                $args[] = $this->castRouteParam($routeValue, $typeName);
+                continue;
+            }
+
+            // 3. Try DI container for object-typed parameters
+            if ($typeName !== null && !$this->isBuiltinType($typeName) && $this->container !== null && $this->container->has($typeName)) {
+                $args[] = $this->container->get($typeName);
+                continue;
+            }
+
+            // 4. Default value
+            if ($param->isDefaultValueAvailable()) {
+                $args[] = $param->getDefaultValue();
+                continue;
+            }
+
+            // 5. Nullable → null
+            if ($param->allowsNull()) {
+                $args[] = null;
+                continue;
+            }
+
+            // 6. Absolute fallback
+            $args[] = null;
+        }
+
+        return $args;
+    }
+
+    /**
+     * Cast a route parameter string to the declared scalar type.
+     */
+    private function castRouteParam(mixed $value, ?string $typeName): mixed
+    {
+        return match ($typeName) {
+            'int'   => (int) $value,
+            'float' => (float) $value,
+            'bool'  => filter_var($value, FILTER_VALIDATE_BOOLEAN),
+            default => $value,
+        };
+    }
+
+    /**
+     * Check if a type name is a PHP builtin type (scalar/array/etc).
+     */
+    private function isBuiltinType(string $typeName): bool
+    {
+        return in_array($typeName, ['int', 'float', 'string', 'bool', 'array', 'object', 'mixed', 'null', 'void', 'never', 'callable', 'iterable', 'true', 'false'], true);
+    }
 
     private function normalizeTrailingSlash(string $path, string $method): string|ResponseInterface
     {
