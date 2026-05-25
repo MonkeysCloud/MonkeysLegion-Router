@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace MonkeysLegion\Router;
@@ -20,7 +21,7 @@ final readonly class RouteDefinition
      * @param string                       $method      HTTP method (upper-case).
      * @param string                       $path        URI template.
      * @param string                       $regex       Compiled regex pattern.
-     * @param \Closure|array             $handler     Route handler.
+     * @param \Closure|array               $handler     Route handler.
      * @param list<string>                 $paramNames  Extracted parameter names.
      * @param list<string>                 $optionalParams Optional parameter names.
      * @param string                       $name        Route name for URL generation.
@@ -46,6 +47,122 @@ final readonly class RouteDefinition
         public array            $meta          = [],
         public int              $specificity   = 0,
     ) {}
+
+    /**
+     * Get the HTTP method.
+     */
+    public function getMethod(): string
+    {
+        return $this->method;
+    }
+
+    /**
+     * Get the URI template path.
+     */
+    public function getPath(): string
+    {
+        return $this->path;
+    }
+
+    /**
+     * Get the compiled regex pattern.
+     */
+    public function getRegex(): string
+    {
+        return $this->regex;
+    }
+
+    /**
+     * Get the route handler.
+     */
+    public function getHandler(): \Closure|array
+    {
+        return $this->handler;
+    }
+
+    /**
+     * Get the extracted parameter names.
+     *
+     * @return list<string>
+     */
+    public function getParamNames(): array
+    {
+        return $this->paramNames;
+    }
+
+    /**
+     * Get the optional parameter names.
+     *
+     * @return list<string>
+     */
+    public function getOptionalParams(): array
+    {
+        return $this->optionalParams;
+    }
+
+    /**
+     * Get the route name.
+     */
+    public function getName(): string
+    {
+        return $this->name;
+    }
+
+    /**
+     * Get the assigned middleware.
+     *
+     * @return list<string>
+     */
+    public function getMiddleware(): array
+    {
+        return $this->middleware;
+    }
+
+    /**
+     * Get parameter constraints.
+     *
+     * @return array<string, string>
+     */
+    public function getConstraints(): array
+    {
+        return $this->constraints;
+    }
+
+    /**
+     * Get default parameter values.
+     *
+     * @return array<string, mixed>
+     */
+    public function getDefaults(): array
+    {
+        return $this->defaults;
+    }
+
+    /**
+     * Get the domain constraint pattern.
+     */
+    public function getDomain(): string
+    {
+        return $this->domain;
+    }
+
+    /**
+     * Get additional metadata.
+     *
+     * @return array<string, mixed>
+     */
+    public function getMeta(): array
+    {
+        return $this->meta;
+    }
+
+    /**
+     * Get the routing priority score.
+     */
+    public function getSpecificity(): int
+    {
+        return $this->specificity;
+    }
 
     /**
      * Get the handler as a [class, method] pair for reflection.

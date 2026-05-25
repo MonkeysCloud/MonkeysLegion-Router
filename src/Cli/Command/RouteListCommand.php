@@ -7,16 +7,9 @@ namespace MonkeysLegion\Router\Cli\Command;
 use MonkeysLegion\Cli\Console\Attributes\Command as CommandAttr;
 use MonkeysLegion\Cli\Console\Command;
 use MonkeysLegion\Router\ControllerScanner;
+use MonkeysLegion\Router\RouteDefinition;
 use MonkeysLegion\Router\Router;
 
-/**
- * CLI command for listing all registered routes.
- * 
- * Usage:
- *   php ml route:list                    # List all routes
- *   php ml route:list --method=GET       # Filter by method
- *   php ml route:list --path=/api        # Filter by path pattern
- */
 #[CommandAttr('route:list', 'List all registered application routes')]
 final class RouteListCommand extends Command
 {
@@ -62,11 +55,12 @@ final class RouteListCommand extends Command
 
         // Print routes
         foreach ($routes as $route) {
-            $method = $route['method'] ?? '-';
-            $path = $this->truncate($route['path'] ?? '', $pathWidth - 2);
+            // FIX: Access object properties/methods instead of array keys
+            $method = $route->getMethod() ?? '-';
+            $path = $this->truncate($route->getPath() ?? '', $pathWidth - 2);
 
             // Get handler info
-            $handler = $route['handler'] ?? null;
+            $handler = $route->getHandler() ?? null;
             $handlerStr = '-';
             if (is_array($handler)) {
                 $class = is_object($handler[0]) ? get_class($handler[0]) : (string)$handler[0];
@@ -93,8 +87,7 @@ final class RouteListCommand extends Command
 
     /**
      * Parse filter arguments from command line.
-     * 
-     * @param array<int, string> $args
+     * * @param array<int, string> $args
      * @return array{method: string|null, path: string|null}
      */
     private function parseFilters(array $args): array
@@ -118,18 +111,23 @@ final class RouteListCommand extends Command
     /**
      * Filter routes based on criteria.
      * 
-     * @param array<int, array<string, mixed>> $routes
+     * @param array<int, RouteDefinition> $routes
      * @param array{method: string|null, path: string|null} $filters
-     * @return array<int, array<string, mixed>>
+     * 
+     * @return array<int, RouteDefinition>
      */
     private function filterRoutes(array $routes, array $filters): array
     {
         return array_filter($routes, function ($route) use ($filters) {
-            if ($filters['method'] && ($route['method'] ?? null) !== $filters['method']) {
+            // FIX: Access object properties/methods instead of array keys
+            $routeMethod = $route->getMethod();
+            $routePath = $route->getPath();
+
+            if ($filters['method'] && $routeMethod !== $filters['method']) {
                 return false;
             }
 
-            if ($filters['path'] && !str_contains($route['path'] ?? '', $filters['path'])) {
+            if ($filters['path'] && !str_contains($routePath ?? '', $filters['path'])) {
                 return false;
             }
 
@@ -158,8 +156,8 @@ final class RouteListCommand extends Command
      */
     private function colorLength(string $method): int
     {
-        // ANSI codes add ~9 characters that don't display
-        return 9;
+        // FIX: Only return padding offset if the method actually got colorized
+        return in_array($method, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], true) ? 9 : 0;
     }
 
     /**
